@@ -280,20 +280,28 @@ function optimize(me::InferenceState)
         # optimizing and use unoptimized IR in codegen.
         gotoifnot_elim_pass!(opt)
         inlining_pass!(opt, opt.src.propagate_inbounds)
-        # Clean up after inlining
-        gotoifnot_elim_pass!(opt)
-        basic_dce_pass!(opt)
-        void_use_elim_pass!(opt)
-        copy_duplicated_expr_pass!(opt)
-        split_undef_flag_pass!(opt)
-        fold_constant_getfield_pass!(opt)
-        # Compute escape information
-        # and elide unnecessary allocations
-        alloc_elim_pass!(opt)
-        # Clean up for `alloc_elim_pass!`
-        gotoifnot_elim_pass!(opt)
-        basic_dce_pass!(opt)
-        void_use_elim_pass!(opt)
+        any_enter = any(x->isa(x, Expr) && x.head == :enter, opt.src.code)
+        if !any_enter && isdefined(@__MODULE__, :NewOptimizer)
+            reindex_labels!(opt)
+            nargs = Int(opt.linfo.def.nargs)-1
+            ir = NewOptimizer.run_passes(opt.src, opt.mod, nargs)
+            NewOptimizer.replace_code!(opt.src, ir, nargs)
+        else
+            # Clean up after inlining
+            gotoifnot_elim_pass!(opt)
+            basic_dce_pass!(opt)
+            void_use_elim_pass!(opt)
+            copy_duplicated_expr_pass!(opt)
+            split_undef_flag_pass!(opt)
+            fold_constant_getfield_pass!(opt)
+            # Compute escape information
+            # and elide unnecessary allocations
+            alloc_elim_pass!(opt)
+            # Clean up for `alloc_elim_pass!`
+            gotoifnot_elim_pass!(opt)
+            basic_dce_pass!(opt)
+            void_use_elim_pass!(opt)
+        end
         # Pop metadata before label reindexing
         let code = opt.src.code::Array{Any,1}
             meta_elim_pass!(code, coverage_enabled())
@@ -797,7 +805,7 @@ function is_pure_builtin(@nospecialize(f))
     end
 end
 
-function statement_effect_free(@nospecialize(e), src::CodeInfo, mod::Module)
+function statement_effect_free(@nospecialize(e), src, mod::Module)
     if isa(e, Expr)
         if e.head === :(=)
             return !isa(e.args[1], GlobalRef) && effect_free(e.args[2], src, mod, false)
@@ -813,7 +821,7 @@ end
 # detect some important side-effect-free calls (allow_volatile=true)
 # and some affect-free calls (allow_volatile=false) -- affect_free means the call
 # cannot be affected by previous calls, except assignment nodes
-function effect_free(@nospecialize(e), src::CodeInfo, mod::Module, allow_volatile::Bool)
+function effect_free(@nospecialize(e), src, mod::Module, allow_volatile::Bool)
     if isa(e, GlobalRef)
         return (isdefined(e.mod, e.name) && (allow_volatile || isconst(e.mod, e.name)))
     elseif isa(e, Symbol)
@@ -1440,6 +1448,9 @@ function inlineable(@nospecialize(f), @nospecialize(ft), e::Expr, atypes::Vector
                 a.args[1] = newlabels[a.args[1]::Int]
             elseif a.head === :gotoifnot
                 a.args[2] = newlabels[a.args[2]::Int]
+            elseif a.head === :(=) && isa(a.args[2], PhiNode)
+                edges = Any[newlabels[edge+1]-1 for edge in a.args[2].edges]
+                a.args[2] = PhiNode(edges, a.args[2].values)
             end
         end
     end
@@ -1967,7 +1978,7 @@ function add_slot!(src::CodeInfo, @nospecialize(typ), is_sa::Bool, name::Symbol=
     return SlotNumber(id)
 end
 
-function is_known_call(e::Expr, @nospecialize(func), src::CodeInfo, mod::Module)
+function is_known_call(e::Expr, @nospecialize(func), src, mod::Module)
     if e.head !== :call
         return false
     end
@@ -1975,7 +1986,7 @@ function is_known_call(e::Expr, @nospecialize(func), src::CodeInfo, mod::Module)
     return isa(f, Const) && f.val === func
 end
 
-function is_known_call_p(e::Expr, @nospecialize(pred), src::CodeInfo, mod::Module)
+function is_known_call_p(e::Expr, @nospecialize(pred), src, mod::Module)
     if e.head !== :call
         return false
     end
@@ -4126,6 +4137,11 @@ function reindex_labels!(sv::OptimizationState)
                 labelnum = mapping[el.args[1]::Int]
                 @assert labelnum !== 0
                 el.args[1] = labelnum
+            elseif el.head === :(=)
+                if isa(el.args[2], PhiNode)
+                    edges = Any[mapping[edge+1]-1 for edge in el.args[2].edges]
+                    el.args[2] = PhiNode(convert(Vector{Any}, edges), el.args[2].values)
+                end
             end
         end
     end

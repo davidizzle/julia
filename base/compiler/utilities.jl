@@ -172,7 +172,7 @@ function method_for_inference_heuristics(method::Method, @nospecialize(sig), spa
     return method
 end
 
-function exprtype(@nospecialize(x), src::CodeInfo, mod::Module)
+function exprtype(@nospecialize(x), src, mod::Module)
     if isa(x, Expr)
         return (x::Expr).typ
     elseif isa(x, SlotNumber)

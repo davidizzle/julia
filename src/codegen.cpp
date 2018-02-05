@@ -64,6 +64,7 @@
 #include <llvm/Support/FormattedStream.h>
 #include <llvm/Support/SourceMgr.h> // for llvmcall
 #include <llvm/Transforms/Utils/Cloning.h> // for llvmcall inlining
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/IR/Verifier.h> // for llvmcall validation
 #if JL_LLVM_VERSION >= 40000
 #  include <llvm/Bitcode/BitcodeWriter.h>
@@ -527,6 +528,7 @@ public:
     // local var info. globals are not in here.
     std::vector<jl_varinfo_t> slots;
     std::vector<jl_cgval_t> SAvalues;
+    std::vector<std::pair<jl_cgval_t, jl_value_t *>> PhiNodes;
     std::vector<bool> ssavalue_assigned;
     std::map<int, jl_arrayvar_t> *arrayvars = NULL;
     jl_module_t *module = NULL;
@@ -3478,9 +3480,64 @@ static void emit_vi_assignment_unboxed(jl_codectx_t &ctx, jl_varinfo_t &vi, Valu
     }
 }
 
+static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
+{
+    ssize_t idx = ((jl_ssavalue_t*)l)->id;
+    assert(idx >= 0);
+    assert(!ctx.ssavalue_assigned.at(idx));
+    jl_value_t *ssavalue_types = (jl_value_t*)ctx.source->ssavaluetypes;
+    assert(jl_is_array(ssavalue_types));
+    jl_array_t *edges = (jl_array_t*)jl_fieldref_noalloc(r, 0);
+    jl_value_t *phiType = jl_array_ptr_ref(ssavalue_types, idx);
+    BasicBlock *BB = ctx.builder.GetInsertBlock();
+    auto InsertPt = BB->getFirstInsertionPt();
+    if (jl_is_uniontype(phiType)) {
+        PHINode *Tindex_phi = PHINode::Create(T_int8, jl_array_len(edges), "tindex_phi");
+        BB->getInstList().insert(InsertPt, Tindex_phi);
+        bool allunbox;
+        size_t min_align;
+        Value *dest = try_emit_union_alloca(ctx, ((jl_uniontype_t*)phiType), allunbox, min_align);
+        Value *ptr = NULL;
+        if (dest) {
+            PHINode *ptr_phi = PHINode::Create(T_prjlvalue, jl_array_len(edges), "ptr_phi");
+            BB->getInstList().insert(InsertPt, ptr_phi);
+            Value *isboxed = ctx.builder.CreateICmpNE(
+                    ctx.builder.CreateAnd(Tindex_phi, ConstantInt::get(T_int8, 0x80)),
+                    ConstantInt::get(T_int8, 0));
+            ptr = ctx.builder.CreateSelect(isboxed,
+                maybe_bitcast(ctx, decay_derived(ptr_phi), T_pint8),
+                maybe_bitcast(ctx, decay_derived(dest), T_pint8));
+            jl_cgval_t val = mark_julia_slot(ptr, phiType, Tindex_phi, tbaa_stack);
+            val.Vboxed = ptr_phi;
+            ctx.PhiNodes.push_back(std::make_pair(val, r));
+            ctx.SAvalues.at(idx) = val;
+            ctx.ssavalue_assigned.at(idx) = true;
+            return;
+        } else if (allunbox) {
+            jl_cgval_t val = mark_julia_slot(NULL, NULL, Tindex_phi, tbaa_stack);
+            ctx.PhiNodes.push_back(std::make_pair(val, r));
+            ctx.SAvalues.at(idx) = val;
+            ctx.ssavalue_assigned.at(idx) = true;
+            return;
+        }
+    }
+    bool isboxed;
+    Type *vtype = julia_type_to_llvm(phiType, &isboxed);
+    PHINode *value_phi = PHINode::Create(vtype, jl_array_len(edges), "value_phi");
+    BB->getInstList().insert(InsertPt, value_phi);
+    jl_cgval_t slot = mark_julia_type(ctx, value_phi, isboxed, phiType);
+    ctx.PhiNodes.push_back(std::make_pair(slot, r));
+    ctx.SAvalues.at(idx) = slot;
+    ctx.ssavalue_assigned.at(idx) = true;
+    return;
+}
+
 static void emit_assignment(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
 {
     if (jl_is_ssavalue(l)) {
+        if (jl_is_phinode(r)) {
+            return emit_phinode_assign(ctx, l, r);
+        }
         ssize_t idx = ((jl_ssavalue_t*)l)->id;
         assert(idx >= 0);
         assert(!ctx.ssavalue_assigned.at(idx));
@@ -3746,6 +3803,9 @@ static jl_cgval_t emit_expr(jl_codectx_t &ctx, jl_value_t *expr)
     }
     if (jl_is_gotonode(expr)) {
         jl_error("GotoNode in value position");
+    }
+    if (jl_is_pinode(expr)) {
+        return convert_julia_type(ctx, emit_expr(ctx, jl_fieldref_noalloc(expr, 0)), jl_fieldref_noalloc(expr, 1));
     }
     if (!jl_is_expr(expr)) {
         int needroot = true;
@@ -5658,6 +5718,9 @@ static std::unique_ptr<Module> emit_function(
                 (malloc_log_mode == JL_LOG_USER && in_user_code));
     };
 
+    std::map<size_t, BasicBlock*> come_from_bb;
+    come_from_bb[0] = ctx.builder.GetInsertBlock();
+
     // Handle the implicit first line number node.
     if (ctx.debug_enabled)
         ctx.builder.SetCurrentDebugLocation(topdebugloc);
@@ -5677,6 +5740,7 @@ static std::unique_ptr<Module> emit_function(
         if (jl_is_labelnode(stmt)) {
             // Label node
             int lname = jl_labelnode_label(stmt);
+            come_from_bb[cursor] = ctx.builder.GetInsertBlock();
             handle_label(lname, true);
             continue;
         }
@@ -5778,6 +5842,7 @@ static std::unique_ptr<Module> emit_function(
         }
         if (jl_is_gotonode(stmt)) {
             int lname = jl_gotonode_label(stmt);
+            come_from_bb[cursor+1] = ctx.builder.GetInsertBlock();
             handle_label(lname, true);
             continue;
         }
@@ -5785,6 +5850,7 @@ static std::unique_ptr<Module> emit_function(
             jl_value_t **args = (jl_value_t**)jl_array_data(expr->args);
             jl_value_t *cond = args[0];
             int lname = jl_unbox_long(args[1]);
+            come_from_bb[cursor+1] = ctx.builder.GetInsertBlock();
             Value *isfalse = emit_condition(ctx, cond, "if");
             if (do_malloc_log(props.in_user_code) && props.line != -1)
                 mallocVisitLine(ctx, props.file, props.line);
@@ -5797,6 +5863,7 @@ static std::unique_ptr<Module> emit_function(
         }
         else if (expr && expr->head == enter_sym) {
             jl_value_t **args = (jl_value_t**)jl_array_data(expr->args);
+
             assert(jl_is_long(args[0]));
             int lname = jl_unbox_long(args[0]);
             CallInst *sj = ctx.builder.CreateCall(prepare_call(except_enter_func));
@@ -5832,6 +5899,118 @@ static std::unique_ptr<Module> emit_function(
     }
     ctx.builder.SetCurrentDebugLocation(noDbg);
     ctx.builder.ClearInsertionPoint();
+
+    // Codegen Phi nodes
+    std::map<BasicBlock *, BasicBlock*> BB_rewrite_map;
+    for (auto &pair : ctx.PhiNodes) {
+        const jl_cgval_t &phi_result = pair.first;
+        jl_value_t *phiType = phi_result.typ;
+        jl_value_t *r = pair.second;
+        jl_array_t *edges = (jl_array_t*)jl_fieldref_noalloc(r, 0);
+        jl_array_t *values = (jl_array_t*)jl_fieldref_noalloc(r, 1);
+        PHINode *VN;
+        Value *PhiAlloca = NULL;
+        if (isa<SelectInst>(phi_result.V)) {
+            PhiAlloca = cast<SelectInst>(phi_result.V)->getOperand(2)->stripPointerCasts();
+            VN = cast<PHINode>(phi_result.Vboxed);
+        } else {
+            VN = cast<PHINode>(phi_result.V);
+        }
+        BasicBlock *PhiBB = VN->getParent();
+        PHINode *TindexN = cast_or_null<PHINode>(phi_result.TIndex);
+        for (size_t i = 0; i < jl_array_len(edges); ++i) {
+            size_t edge = jl_unbox_long(jl_array_ptr_ref(edges, i));
+            jl_value_t *value = jl_array_ptr_ref(values, i);
+            Value *V = NULL;
+            BasicBlock *IncomingBB = come_from_bb[edge];
+            BasicBlock *FromBB = IncomingBB;
+            if (BB_rewrite_map.count(FromBB)) {
+                FromBB = BB_rewrite_map[FromBB];
+            }
+            ctx.builder.SetInsertPoint(FromBB->getTerminator());
+            jl_cgval_t val;
+            if (jl_is_ssavalue(value)) {
+                ssize_t idx = ((jl_ssavalue_t*)value)->id;
+                if (!ctx.ssavalue_assigned.at(idx)) {
+                    ctx.ssavalue_assigned.at(idx) = true; // (assignment, not comparison test)
+                    VN->addIncoming(UndefValue::get(VN->getType()), FromBB);
+                    TindexN->addIncoming(UndefValue::get(T_int8), FromBB);
+                    continue;
+                }
+                val = ctx.SAvalues.at(idx);
+            } else {
+                val = emit_expr(ctx, value);
+            }
+            if (jl_is_uniontype(phiType)) {
+                TerminatorInst *terminator = FromBB->getTerminator();
+                if (!isa<BranchInst>(terminator) || cast<BranchInst>(terminator)->isConditional()) {
+                    for (size_t i = 0; i < terminator->getNumSuccessors(); ++i) {
+                        if (terminator->getSuccessor(i) == PhiBB) {
+                            FromBB = llvm::SplitCriticalEdge(terminator, i);
+                            ctx.builder.SetInsertPoint(FromBB);
+                            break;
+                        }
+                    }
+                } else {
+                    terminator->eraseFromParent();
+                    ctx.builder.SetInsertPoint(FromBB);
+                }
+            } else {
+                V = emit_unbox(ctx, VN->getType(), val, val.typ);
+                VN->addIncoming(V, FromBB);
+                assert(!TindexN);
+                continue;
+            }
+            Value *RTindex = NULL;
+            if (!val.TIndex) {
+                size_t tindex = get_box_tindex((jl_datatype_t*)val.typ, phiType);
+                if (tindex == 0) {
+                    V = boxed(ctx, val);
+                    RTindex = ConstantInt::get(T_int8, 0x80);
+                } else {
+                    V = ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
+                    if (!type_is_ghost(julia_type_to_llvm(val.typ)))
+                        emit_unionmove(ctx, PhiAlloca, val, NULL, false, NULL);
+                    RTindex = ConstantInt::get(T_int8, tindex);
+                }
+            } else {
+                jl_cgval_t new_union = convert_julia_type(ctx, val, phiType);
+                emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
+                V = new_union.Vboxed;
+                RTindex = new_union.TIndex;
+            }
+            ctx.builder.CreateBr(PhiBB);
+            VN->addIncoming(V, ctx.builder.GetInsertBlock());
+            TindexN->addIncoming(RTindex, ctx.builder.GetInsertBlock());
+            // Check any phi nodes in the Phi block to see if by splitting the edges,
+            // we made things inconsistent
+            if (FromBB != ctx.builder.GetInsertBlock()) {
+                BB_rewrite_map[FromBB] = ctx.builder.GetInsertBlock();
+                for (BasicBlock::iterator I = PhiBB->begin(); isa<PHINode>(I); ++I) {
+                    PHINode *PN = cast<PHINode>(I);
+                    ssize_t BBIdx = PN->getBasicBlockIndex(FromBB);
+                    if (BBIdx == -1)
+                        continue;
+                    PN->setIncomingBlock(BBIdx, ctx.builder.GetInsertBlock());
+                }
+            }
+        }
+        // Julia PHINodes may be incomplete with respect to predecessors, LLVM's may not
+        for (auto *pred : predecessors(PhiBB)) {
+            bool found = false;
+            for (size_t i = 0; i < VN->getNumIncomingValues(); ++i) {
+                found = pred == VN->getIncomingBlock(i);
+                if (found)
+                    break;
+            }
+            if (!found) {
+                VN->addIncoming(UndefValue::get(VN->getType()), pred);
+                if (TindexN) {
+                    TindexN->addIncoming(UndefValue::get(TindexN->getType()), pred);
+                }
+            }
+        }
+    }
 
     // step 13. Perform any delayed instantiations
     if (ctx.debug_enabled) {

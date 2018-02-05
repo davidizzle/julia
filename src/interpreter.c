@@ -20,6 +20,7 @@ typedef struct {
     jl_module_t *module; // context for globals
     jl_value_t **locals; // slots for holding local slots and ssavalues
     jl_svec_t *sparam_vals; // method static parameters, if eval-ing a method body
+    size_t last_branch; // Points at the last branch statement (for evaluating phi nodes)
     size_t ip; // Points to the currently-evaluating statement
     int preevaluation; // use special rules for pre-evaluating expressions
     int continue_at; // statement index to jump to after leaving exception handler (0 if none)
@@ -496,10 +497,36 @@ SECT_INTERP static jl_value_t *eval_body(jl_array_t *stmts, interpreter_state *s
             jl_get_ptls_states()->world_age = jl_world_counter;
         jl_value_t *stmt = jl_array_ptr_ref(stmts, s->ip);
         if (jl_is_gotonode(stmt)) {
+            s->last_branch = s->ip;
             s->ip = jl_gotonode_label(stmt) - 1;
             continue;
         }
+        else if (jl_is_pinode(stmt)) {
+            jl_value_t *val = eval_value(jl_fieldref_noalloc(stmt, 0), s);
+#ifndef JL_NDEBUG
+            jl_typeassert(val, jl_fieldref_noalloc(stmt, 1));
+#endif
+            return val;
+        }
+        else if (jl_is_phinode(stmt)) {
+            jl_array_t *edges = (jl_array_t*)jl_fieldref_noalloc(stmt, 0);
+            ssize_t edge = -1;
+            for (int i = 0; i < jl_array_len(edges); ++i) {
+                size_t from = jl_unbox_long(jl_arrayref(edges, i));
+                if (from == s->last_branch) {
+                    edge = i;
+                    break;
+                }
+            }
+            if (edge == -1) {
+                jl_error("PhiNode edges do not contain last branch");
+            }
+            jl_value_t *val = jl_arrayref((jl_array_t*)jl_fieldref_noalloc(stmt, 1), edge);
+            return eval_value(val, s);
+        }
         else if (jl_is_expr(stmt)) {
+            // Most exprs are allowed to end a BB by fall through
+            s->last_branch = s->ip;
             jl_sym_t *head = ((jl_expr_t*)stmt)->head;
             if (head == return_sym) {
                 return eval_value(jl_exprarg(stmt, 0), s);
@@ -609,6 +636,7 @@ SECT_INTERP static jl_value_t *eval_body(jl_array_t *stmts, interpreter_state *s
             }
         }
         else if (jl_is_newvarnode(stmt)) {
+            s->last_branch = s->ip;
             jl_value_t *var = jl_fieldref(stmt, 0);
             assert(jl_is_slot(var));
             ssize_t n = jl_slot_number(var);
