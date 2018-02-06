@@ -3492,13 +3492,13 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
     BasicBlock *BB = ctx.builder.GetInsertBlock();
     auto InsertPt = BB->getFirstInsertionPt();
     if (jl_is_uniontype(phiType)) {
-        PHINode *Tindex_phi = PHINode::Create(T_int8, jl_array_len(edges), "tindex_phi");
-        BB->getInstList().insert(InsertPt, Tindex_phi);
         bool allunbox;
         size_t min_align;
         Value *dest = try_emit_union_alloca(ctx, ((jl_uniontype_t*)phiType), allunbox, min_align);
         Value *ptr = NULL;
         if (dest) {
+            PHINode *Tindex_phi = PHINode::Create(T_int8, jl_array_len(edges), "tindex_phi");
+            BB->getInstList().insert(InsertPt, Tindex_phi);
             PHINode *ptr_phi = PHINode::Create(T_prjlvalue, jl_array_len(edges), "ptr_phi");
             BB->getInstList().insert(InsertPt, ptr_phi);
             Value *isboxed = ctx.builder.CreateICmpNE(
@@ -3514,6 +3514,8 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
             ctx.ssavalue_assigned.at(idx) = true;
             return;
         } else if (allunbox) {
+            PHINode *Tindex_phi = PHINode::Create(T_int8, jl_array_len(edges), "tindex_phi");
+            BB->getInstList().insert(InsertPt, Tindex_phi);
             jl_cgval_t val = mark_julia_slot(NULL, NULL, Tindex_phi, tbaa_stack);
             ctx.PhiNodes.push_back(std::make_pair(val, r));
             ctx.SAvalues.at(idx) = val;
@@ -3523,6 +3525,8 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
     }
     bool isboxed;
     Type *vtype = julia_type_to_llvm(phiType, &isboxed);
+    if (isboxed)
+        vtype = T_prjlvalue;
     PHINode *value_phi = PHINode::Create(vtype, jl_array_len(edges), "value_phi");
     BB->getInstList().insert(InsertPt, value_phi);
     jl_cgval_t slot = mark_julia_type(ctx, value_phi, isboxed, phiType);
@@ -5941,47 +5945,51 @@ static std::unique_ptr<Module> emit_function(
             } else {
                 val = emit_expr(ctx, value);
             }
-            if (jl_is_uniontype(phiType)) {
-                TerminatorInst *terminator = FromBB->getTerminator();
-                if (!isa<BranchInst>(terminator) || cast<BranchInst>(terminator)->isConditional()) {
-                    for (size_t i = 0; i < terminator->getNumSuccessors(); ++i) {
-                        if (terminator->getSuccessor(i) == PhiBB) {
-                            FromBB = llvm::SplitCriticalEdge(terminator, i);
-                            ctx.builder.SetInsertPoint(FromBB);
-                            break;
-                        }
+            TerminatorInst *terminator = FromBB->getTerminator();
+            if (!isa<BranchInst>(terminator) || cast<BranchInst>(terminator)->isConditional()) {
+                for (size_t i = 0; i < terminator->getNumSuccessors(); ++i) {
+                    if (terminator->getSuccessor(i) == PhiBB) {
+                        FromBB = llvm::SplitCriticalEdge(terminator, i);
+                        ctx.builder.SetInsertPoint(FromBB);
+                        break;
                     }
-                } else {
-                    terminator->eraseFromParent();
-                    ctx.builder.SetInsertPoint(FromBB);
                 }
             } else {
-                V = emit_unbox(ctx, VN->getType(), val, val.typ);
+                terminator->eraseFromParent();
+                ctx.builder.SetInsertPoint(FromBB);
+            }
+            if (!jl_is_uniontype(phiType)) {
+                if (phiType == (jl_value_t*)jl_any_type) {
+                    V = boxed(ctx, val);
+                } else {
+                    V = emit_unbox(ctx, VN->getType(), val, val.typ);
+                }
                 VN->addIncoming(V, FromBB);
                 assert(!TindexN);
-                continue;
-            }
-            Value *RTindex = NULL;
-            if (!val.TIndex) {
-                size_t tindex = get_box_tindex((jl_datatype_t*)val.typ, phiType);
-                if (tindex == 0) {
-                    V = boxed(ctx, val);
-                    RTindex = ConstantInt::get(T_int8, 0x80);
-                } else {
-                    V = ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
-                    if (!type_is_ghost(julia_type_to_llvm(val.typ)))
-                        emit_unionmove(ctx, PhiAlloca, val, NULL, false, NULL);
-                    RTindex = ConstantInt::get(T_int8, tindex);
-                }
             } else {
-                jl_cgval_t new_union = convert_julia_type(ctx, val, phiType);
-                emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
-                V = new_union.Vboxed;
-                RTindex = new_union.TIndex;
+                Value *RTindex = NULL;
+                if (!val.TIndex) {
+                    size_t tindex = get_box_tindex((jl_datatype_t*)val.typ, phiType);
+                    if (tindex == 0) {
+                        V = boxed(ctx, val);
+                        RTindex = ConstantInt::get(T_int8, 0x80);
+                    } else {
+                        V = ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
+                        if (!type_is_ghost(julia_type_to_llvm(val.typ)))
+                            emit_unionmove(ctx, PhiAlloca, val, NULL, false, NULL);
+                        RTindex = ConstantInt::get(T_int8, tindex);
+                    }
+                } else {
+                    jl_cgval_t new_union = convert_julia_type(ctx, val, phiType);
+                    emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
+                    V = new_union.Vboxed;
+                    RTindex = new_union.TIndex;
+                }
+                VN->addIncoming(V, ctx.builder.GetInsertBlock());
+                if (TindexN)
+                    TindexN->addIncoming(RTindex, ctx.builder.GetInsertBlock());
             }
             ctx.builder.CreateBr(PhiBB);
-            VN->addIncoming(V, ctx.builder.GetInsertBlock());
-            TindexN->addIncoming(RTindex, ctx.builder.GetInsertBlock());
             // Check any phi nodes in the Phi block to see if by splitting the edges,
             // we made things inconsistent
             if (FromBB != ctx.builder.GetInsertBlock()) {
