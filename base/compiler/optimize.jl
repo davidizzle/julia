@@ -282,6 +282,7 @@ function optimize(me::InferenceState)
         inlining_pass!(opt, opt.src.propagate_inbounds)
         any_enter = any(x->isa(x, Expr) && x.head == :enter, opt.src.code)
         if !any_enter && isdefined(@__MODULE__, :NewOptimizer)
+            ccall(:jl_, Cvoid, (Any,), (opt.linfo.def, opt.linfo.def.file, opt.linfo.def.line, opt.linfo.specTypes))
             reindex_labels!(opt)
             nargs = Int(opt.linfo.def.nargs)-1
             ir = NewOptimizer.run_passes(opt.src, opt.mod, nargs)
@@ -729,6 +730,18 @@ function substitute!(
     end
     if isa(e, NewvarNode)
         return NewvarNode(substitute!(e.slot, na, argexprs, spsig, spvals, offset, boundscheck))
+    end
+    if isa(e, PhiNode)
+        values = Vector{Any}(uninitialized, length(e.values))
+        for i = 1:length(values)
+            isassigned(e.values, i) || continue
+            values[i] = substitute!(e.values[i], na, argexprs, spsig,
+                spvals, offset, boundscheck)
+        end
+        return PhiNode(e.edges, values)
+    end
+    if isa(e, PiNode)
+        return PiNode(substitute!(e.val, na, argexprs, spsig, spvals, offset, boundscheck), e.typ)
     end
     if isa(e, Expr)
         e = e::Expr
@@ -1691,6 +1704,14 @@ function ssavalue_increment(body::Expr, incr)
         body.args[i] = ssavalue_increment(body.args[i], incr)
     end
     return body
+end
+function ssavalue_increment(body::PhiNode, incr)
+    values = Vector{Any}(uninitialized, length(body.values))
+    for i = 1:length(values)
+        isassigned(body.values, i) || continue
+        values[i] = ssavalue_increment(body.values[i], incr)
+    end
+    return PhiNode(body.edges, values)
 end
 
 function mk_getfield(texpr, i, T)
