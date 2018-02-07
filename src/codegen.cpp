@@ -528,7 +528,7 @@ public:
     // local var info. globals are not in here.
     std::vector<jl_varinfo_t> slots;
     std::vector<jl_cgval_t> SAvalues;
-    std::vector<std::pair<jl_cgval_t, jl_value_t *>> PhiNodes;
+    std::vector<std::tuple<jl_cgval_t, PHINode *, jl_value_t *>> PhiNodes;
     std::vector<bool> ssavalue_assigned;
     std::map<int, jl_arrayvar_t> *arrayvars = NULL;
     jl_module_t *module = NULL;
@@ -3509,15 +3509,15 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
                 maybe_bitcast(ctx, decay_derived(dest), T_pint8));
             jl_cgval_t val = mark_julia_slot(ptr, phiType, Tindex_phi, tbaa_stack);
             val.Vboxed = ptr_phi;
-            ctx.PhiNodes.push_back(std::make_pair(val, r));
+            ctx.PhiNodes.push_back(std::make_tuple(val, ptr_phi, r));
             ctx.SAvalues.at(idx) = val;
             ctx.ssavalue_assigned.at(idx) = true;
             return;
         } else if (allunbox) {
             PHINode *Tindex_phi = PHINode::Create(T_int8, jl_array_len(edges), "tindex_phi");
             BB->getInstList().insert(InsertPt, Tindex_phi);
-            jl_cgval_t val = mark_julia_slot(NULL, NULL, Tindex_phi, tbaa_stack);
-            ctx.PhiNodes.push_back(std::make_pair(val, r));
+            jl_cgval_t val = mark_julia_slot(NULL, phiType, Tindex_phi, tbaa_stack);
+            ctx.PhiNodes.push_back(std::make_tuple(val, (PHINode*)NULL, r));
             ctx.SAvalues.at(idx) = val;
             ctx.ssavalue_assigned.at(idx) = true;
             return;
@@ -3527,10 +3527,22 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
     Type *vtype = julia_type_to_llvm(phiType, &isboxed);
     if (isboxed)
         vtype = T_prjlvalue;
-    PHINode *value_phi = PHINode::Create(vtype, jl_array_len(edges), "value_phi");
-    BB->getInstList().insert(InsertPt, value_phi);
-    jl_cgval_t slot = mark_julia_type(ctx, value_phi, isboxed, phiType);
-    ctx.PhiNodes.push_back(std::make_pair(slot, r));
+    jl_cgval_t slot;
+    vtype->dump();
+    PHINode *value_phi = NULL;
+    if (vtype->isAggregateType()) {
+        value_phi = PHINode::Create(vtype->getPointerTo(), jl_array_len(edges), "value_phi");
+        BB->getInstList().insert(InsertPt, value_phi);
+        Value *alloc = emit_static_alloca(ctx, vtype);
+        ctx.builder.CreateMemCpy(alloc, value_phi, jl_datatype_size(phiType),
+            jl_datatype_align(phiType), false);
+        slot = mark_julia_slot(alloc, phiType, NULL, tbaa_stack);
+    } else {
+        value_phi = PHINode::Create(vtype, jl_array_len(edges), "value_phi");
+        BB->getInstList().insert(InsertPt, value_phi);
+        slot = mark_julia_type(ctx, value_phi, isboxed, phiType);
+    }
+    ctx.PhiNodes.push_back(std::make_tuple(slot, value_phi, r));
     ctx.SAvalues.at(idx) = slot;
     ctx.ssavalue_assigned.at(idx) = true;
     return;
@@ -5906,19 +5918,17 @@ static std::unique_ptr<Module> emit_function(
 
     // Codegen Phi nodes
     std::map<BasicBlock *, BasicBlock*> BB_rewrite_map;
-    for (auto &pair : ctx.PhiNodes) {
-        const jl_cgval_t &phi_result = pair.first;
+    for (auto &tup : ctx.PhiNodes) {
+        jl_cgval_t phi_result;
+        PHINode *VN;
+        jl_value_t *r;
+        std::tie(phi_result, VN, r) = tup;
         jl_value_t *phiType = phi_result.typ;
-        jl_value_t *r = pair.second;
         jl_array_t *edges = (jl_array_t*)jl_fieldref_noalloc(r, 0);
         jl_array_t *values = (jl_array_t*)jl_fieldref_noalloc(r, 1);
-        PHINode *VN;
         Value *PhiAlloca = NULL;
         if (isa<SelectInst>(phi_result.V)) {
             PhiAlloca = cast<SelectInst>(phi_result.V)->getOperand(2)->stripPointerCasts();
-            VN = cast<PHINode>(phi_result.Vboxed);
-        } else {
-            VN = cast<PHINode>(phi_result.V);
         }
         BasicBlock *PhiBB = VN->getParent();
         PHINode *TindexN = cast_or_null<PHINode>(phi_result.TIndex);
@@ -5936,9 +5946,9 @@ static std::unique_ptr<Module> emit_function(
             if (jl_is_ssavalue(value)) {
                 ssize_t idx = ((jl_ssavalue_t*)value)->id;
                 if (!ctx.ssavalue_assigned.at(idx)) {
-                    ctx.ssavalue_assigned.at(idx) = true; // (assignment, not comparison test)
                     VN->addIncoming(UndefValue::get(VN->getType()), FromBB);
-                    TindexN->addIncoming(UndefValue::get(T_int8), FromBB);
+                    if (TindexN)
+                        TindexN->addIncoming(UndefValue::get(T_int8), FromBB);
                     continue;
                 }
                 val = ctx.SAvalues.at(idx);
