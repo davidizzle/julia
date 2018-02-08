@@ -3531,7 +3531,8 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
     vtype->dump();
     PHINode *value_phi = NULL;
     if (vtype->isAggregateType()) {
-        value_phi = PHINode::Create(vtype->getPointerTo(), jl_array_len(edges), "value_phi");
+        value_phi = PHINode::Create(vtype->getPointerTo(AddressSpace::Derived),
+                jl_array_len(edges), "value_phi");
         BB->getInstList().insert(InsertPt, value_phi);
         Value *alloc = emit_static_alloca(ctx, vtype);
         ctx.builder.CreateMemCpy(alloc, value_phi, jl_datatype_size(phiType),
@@ -5734,7 +5735,6 @@ static std::unique_ptr<Module> emit_function(
                 (malloc_log_mode == JL_LOG_USER && in_user_code));
     };
 
-    std::map<size_t, BasicBlock*> come_from_bb;
     come_from_bb[0] = ctx.builder.GetInsertBlock();
 
     // Handle the implicit first line number node.
@@ -5937,10 +5937,10 @@ static std::unique_ptr<Module> emit_function(
             jl_value_t *value = jl_array_ptr_ref(values, i);
             Value *V = NULL;
             BasicBlock *IncomingBB = come_from_bb[edge];
-            BasicBlock *FromBB = IncomingBB;
-            if (BB_rewrite_map.count(FromBB)) {
-                FromBB = BB_rewrite_map[FromBB];
+            if (BB_rewrite_map.count(IncomingBB)) {
+                IncomingBB = BB_rewrite_map[IncomingBB];
             }
+            BasicBlock *FromBB = IncomingBB;
             ctx.builder.SetInsertPoint(FromBB->getTerminator());
             jl_cgval_t val;
             if (jl_is_ssavalue(value)) {
@@ -5957,24 +5957,39 @@ static std::unique_ptr<Module> emit_function(
             }
             TerminatorInst *terminator = FromBB->getTerminator();
             if (!isa<BranchInst>(terminator) || cast<BranchInst>(terminator)->isConditional()) {
+                bool found = false;
                 for (size_t i = 0; i < terminator->getNumSuccessors(); ++i) {
                     if (terminator->getSuccessor(i) == PhiBB) {
-                        FromBB = llvm::SplitCriticalEdge(terminator, i);
-                        ctx.builder.SetInsertPoint(FromBB);
+                        // Can't use `llvm::SplitCriticalEdge` here because
+                        // we may have invalid phi nodes in the destination.
+                        BasicBlock *NewBB = BasicBlock::Create(terminator->getContext(),
+                           FromBB->getName() + "." + PhiBB->getName() + "_crit_edge");
+                        terminator->setSuccessor(i, NewBB);
+                        Function::iterator FBBI = FromBB->getIterator();
+                        ctx.f->getBasicBlockList().insert(++FBBI, NewBB);
+                        ctx.builder.SetInsertPoint(NewBB);
+                        found = true;
                         break;
                     }
                 }
+                assert(found);
             } else {
                 terminator->eraseFromParent();
                 ctx.builder.SetInsertPoint(FromBB);
             }
             if (!jl_is_uniontype(phiType)) {
-                if (phiType == (jl_value_t*)jl_any_type) {
+                if (VN->getType() == T_prjlvalue) {
                     V = boxed(ctx, val);
+                } else if (VN->getType()->isPointerTy() && !val.constant) {
+                    V = maybe_bitcast(ctx,
+                            decay_derived(data_pointer(ctx, val)),
+                            VN->getType());
                 } else {
                     V = emit_unbox(ctx, VN->getType(), val, val.typ);
                 }
-                VN->addIncoming(V, FromBB);
+                V->getType()->dump();
+                VN->getType()->dump();
+                VN->addIncoming(V, ctx.builder.GetInsertBlock());
                 assert(!TindexN);
             } else {
                 Value *RTindex = NULL;
@@ -6002,11 +6017,11 @@ static std::unique_ptr<Module> emit_function(
             ctx.builder.CreateBr(PhiBB);
             // Check any phi nodes in the Phi block to see if by splitting the edges,
             // we made things inconsistent
-            if (FromBB != ctx.builder.GetInsertBlock()) {
-                BB_rewrite_map[FromBB] = ctx.builder.GetInsertBlock();
+            if (IncomingBB != ctx.builder.GetInsertBlock()) {
+                BB_rewrite_map[IncomingBB] = ctx.builder.GetInsertBlock();
                 for (BasicBlock::iterator I = PhiBB->begin(); isa<PHINode>(I); ++I) {
                     PHINode *PN = cast<PHINode>(I);
-                    ssize_t BBIdx = PN->getBasicBlockIndex(FromBB);
+                    ssize_t BBIdx = PN->getBasicBlockIndex(IncomingBB);
                     if (BBIdx == -1)
                         continue;
                     PN->setIncomingBlock(BBIdx, ctx.builder.GetInsertBlock());
