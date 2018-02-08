@@ -5699,25 +5699,16 @@ static std::unique_ptr<Module> emit_function(
             }
             return bb;
         }
-        // If this is a label node in an empty bb
-        if (lname == cursor + 1 && cur_bb->begin() == cur_bb->end()) {
-            assert(unconditional);
-            // Use this bb as the one for the new label.
-            bb = cur_bb;
+        // use the label name as the BB name.
+        bb = BasicBlock::Create(jl_LLVMContext,
+                                "L" + std::to_string(lname), f);
+        if (unconditional) {
+           if (!cur_bb->getTerminator())
+               ctx.builder.CreateBr(bb);
+           ctx.builder.SetInsertPoint(bb);
         }
         else {
-            // Otherwise, create a new BB
-            // use the label name as the BB name.
-            bb = BasicBlock::Create(jl_LLVMContext,
-                                    "L" + std::to_string(lname), f);
-            if (unconditional) {
-                if (!cur_bb->getTerminator())
-                    ctx.builder.CreateBr(bb);
-                ctx.builder.SetInsertPoint(bb);
-            }
-            else {
-                add_to_list(lname, bb);
-            }
+           add_to_list(lname, bb);
         }
         if (unconditional)
             find_next_stmt(lname);
@@ -5735,6 +5726,7 @@ static std::unique_ptr<Module> emit_function(
                 (malloc_log_mode == JL_LOG_USER && in_user_code));
     };
 
+    std::map<size_t, BasicBlock*> come_from_bb;
     come_from_bb[0] = ctx.builder.GetInsertBlock();
 
     // Handle the implicit first line number node.
@@ -5756,7 +5748,6 @@ static std::unique_ptr<Module> emit_function(
         if (jl_is_labelnode(stmt)) {
             // Label node
             int lname = jl_labelnode_label(stmt);
-            come_from_bb[cursor] = ctx.builder.GetInsertBlock();
             handle_label(lname, true);
             continue;
         }
@@ -5870,12 +5861,16 @@ static std::unique_ptr<Module> emit_function(
             Value *isfalse = emit_condition(ctx, cond, "if");
             if (do_malloc_log(props.in_user_code) && props.line != -1)
                 mallocVisitLine(ctx, props.file, props.line);
-            BasicBlock *ifso = BasicBlock::Create(jl_LLVMContext, "if", f);
+            bool next_is_label = jl_is_labelnode(jl_array_ptr_ref(stmts, cursor+1));
             BasicBlock *ifnot = handle_label(lname, false);
+            BasicBlock *ifso = next_is_label ? handle_label(cursor+2, false) : BasicBlock::Create(jl_LLVMContext, "if", f);
             // Any branches treated as constant in type inference should be
             // eliminated before running
             ctx.builder.CreateCondBr(isfalse, ifnot, ifso);
-            ctx.builder.SetInsertPoint(ifso);
+            if (!next_is_label)
+                ctx.builder.SetInsertPoint(ifso);
+            find_next_stmt(next_is_label ? -1 : cursor+1);
+            continue;
         }
         else if (expr && expr->head == enter_sym) {
             jl_value_t **args = (jl_value_t**)jl_array_data(expr->args);
@@ -5911,10 +5906,17 @@ static std::unique_ptr<Module> emit_function(
                 mallocVisitLine(ctx, props.file, props.line);
             }
         }
+        if (cursor + 1 < jl_array_len(stmts) && jl_is_labelnode(jl_array_ptr_ref(stmts, cursor+1)))
+            come_from_bb[cursor+1] = ctx.builder.GetInsertBlock();
         find_next_stmt(cursor + 1);
     }
     ctx.builder.SetCurrentDebugLocation(noDbg);
     ctx.builder.ClearInsertionPoint();
+
+    // We don't visit empty labels, but they can still be implicit terminators,
+    // just add them to the list
+    for (auto &pair : labels)
+        come_from_bb[pair.first] = pair.second;
 
     // Codegen Phi nodes
     std::map<BasicBlock *, BasicBlock*> BB_rewrite_map;
