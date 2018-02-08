@@ -282,7 +282,6 @@ function optimize(me::InferenceState)
         inlining_pass!(opt, opt.src.propagate_inbounds)
         any_enter = any(x->isa(x, Expr) && x.head == :enter, opt.src.code)
         if !any_enter && isdefined(@__MODULE__, :NewOptimizer)
-            ccall(:jl_, Cvoid, (Any,), (opt.linfo.def, opt.linfo.def.file, opt.linfo.def.line, opt.linfo.specTypes))
             reindex_labels!(opt)
             nargs = Int(opt.linfo.def.nargs)-1
             ir = NewOptimizer.run_passes(opt.src, opt.mod, nargs)
@@ -1705,6 +1704,7 @@ function ssavalue_increment(body::Expr, incr)
     end
     return body
 end
+ssavalue_increment(body::PiNode, incr) = PiNode(ssavalue_increment(body.val, incr), body.typ)
 function ssavalue_increment(body::PhiNode, incr)
     values = Vector{Any}(uninitialized, length(body.values))
     for i = 1:length(values)
