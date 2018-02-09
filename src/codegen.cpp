@@ -5959,9 +5959,9 @@ static std::unique_ptr<Module> emit_function(
             BasicBlock *FromBB = IncomingBB;
             ctx.builder.SetInsertPoint(FromBB->getTerminator());
             jl_cgval_t val;
-            if (jl_is_ssavalue(value)) {
-                ssize_t idx = ((jl_ssavalue_t*)value)->id;
-                if (!ctx.ssavalue_assigned.at(idx)) {
+            if (!value || jl_is_ssavalue(value)) {
+                ssize_t idx = value ? ((jl_ssavalue_t*)value)->id : 0;
+                if (!value || !ctx.ssavalue_assigned.at(idx)) {
                     if (VN)
                         VN->addIncoming(UndefValue::get(VN->getType()), FromBB);
                     if (TindexN)
