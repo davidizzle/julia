@@ -3527,6 +3527,15 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
     Type *vtype = julia_type_to_llvm(phiType, &isboxed);
     if (isboxed)
         vtype = T_prjlvalue;
+    // The frontend should really not emit this, but we allow it
+    // for convenience.
+    if (type_is_ghost(vtype)) {
+        assert(jl_is_datatype(phiType) && ((jl_datatype_t*)phiType)->instance);
+        // Skip adding it to the PhiNodes list, since we didn't create one.
+        ctx.SAvalues.at(idx) = mark_julia_const(((jl_datatype_t*)phiType)->instance);
+        ctx.ssavalue_assigned.at(idx) = true;
+        return;
+    }
     jl_cgval_t slot;
     vtype->dump();
     PHINode *value_phi = NULL;
