@@ -3870,6 +3870,11 @@ static jl_cgval_t emit_expr(jl_codectx_t &ctx, jl_value_t *expr)
     if (head == isdefined_sym) {
         return emit_isdefined(ctx, args[0]);
     }
+    else if (head == throw_undef_if_not_sym) {
+        undef_var_error_ifnot(ctx, emit_unbox(ctx, T_int1, emit_expr(ctx, args[1]),
+            (jl_value_t*)jl_bool_type), (jl_sym_t*)args[0]);
+        return NULL;
+    }
     else if (head == invoke_sym) {
         return emit_invoke(ctx, ex);
     }

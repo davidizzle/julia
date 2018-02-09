@@ -25,7 +25,8 @@ const VALID_EXPR_HEADS = IdDict{Any,Any}(
     :simdloop => 0:0,
     :gc_preserve_begin => 0:typemax(Int),
     :gc_preserve_end => 0:typemax(Int),
-    :thunk => 1:1
+    :thunk => 1:1,
+    :throw_undef_if_not => 2:2
 )
 
 # @enum isn't defined yet, otherwise I'd use it for this

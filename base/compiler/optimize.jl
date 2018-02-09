@@ -657,6 +657,8 @@ function _widen_all_consts!(e::Expr, untypedload::Vector{Bool}, slottypes::Vecto
                 end
                 e.args[i] = x
             end
+        elseif isa(x, PiNode)
+            e.args[i] = PiNode(x.val, widenconst(x.typ))
         elseif isa(x, SlotNumber) && (i != 1 || e.head !== :(=))
             untypedload[x.id] = true
         end

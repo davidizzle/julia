@@ -430,6 +430,14 @@ SECT_INTERP static jl_value_t *eval_value(jl_value_t *e, interpreter_state *s)
         }
         return defined ? jl_true : jl_false;
     }
+    else if (head == throw_undef_if_not_sym) {
+        jl_value_t *cond = eval_value(args[1], s);
+        assert(jl_is_bool(cond));
+        if (cond == jl_false) {
+            jl_undefined_var_error((jl_sym_t*)args[0]);
+        }
+        return jl_nothing;
+    }
     else if (head == new_sym) {
         jl_value_t *thetype = eval_value(args[0], s);
         jl_value_t *v=NULL, *fldv=NULL;
