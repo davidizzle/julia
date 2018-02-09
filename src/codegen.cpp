@@ -5938,11 +5938,11 @@ static std::unique_ptr<Module> emit_function(
         jl_array_t *edges = (jl_array_t*)jl_fieldref_noalloc(r, 0);
         jl_array_t *values = (jl_array_t*)jl_fieldref_noalloc(r, 1);
         Value *PhiAlloca = NULL;
-        if (isa<SelectInst>(phi_result.V)) {
+        if (phi_result.V && isa<SelectInst>(phi_result.V)) {
             PhiAlloca = cast<SelectInst>(phi_result.V)->getOperand(2)->stripPointerCasts();
         }
-        BasicBlock *PhiBB = VN->getParent();
         PHINode *TindexN = cast_or_null<PHINode>(phi_result.TIndex);
+        BasicBlock *PhiBB = VN ? VN->getParent() : TindexN->getParent();
         for (size_t i = 0; i < jl_array_len(edges); ++i) {
             size_t edge = jl_unbox_long(jl_array_ptr_ref(edges, i));
             jl_value_t *value = jl_array_ptr_ref(values, i);
@@ -5957,7 +5957,8 @@ static std::unique_ptr<Module> emit_function(
             if (jl_is_ssavalue(value)) {
                 ssize_t idx = ((jl_ssavalue_t*)value)->id;
                 if (!ctx.ssavalue_assigned.at(idx)) {
-                    VN->addIncoming(UndefValue::get(VN->getType()), FromBB);
+                    if (VN)
+                        VN->addIncoming(UndefValue::get(VN->getType()), FromBB);
                     if (TindexN)
                         TindexN->addIncoming(UndefValue::get(T_int8), FromBB);
                     continue;
@@ -6021,7 +6022,8 @@ static std::unique_ptr<Module> emit_function(
                     V = new_union.Vboxed;
                     RTindex = new_union.TIndex;
                 }
-                VN->addIncoming(V, ctx.builder.GetInsertBlock());
+                if (VN)
+                    VN->addIncoming(V, ctx.builder.GetInsertBlock());
                 if (TindexN)
                     TindexN->addIncoming(RTindex, ctx.builder.GetInsertBlock());
             }
@@ -6041,14 +6043,17 @@ static std::unique_ptr<Module> emit_function(
         }
         // Julia PHINodes may be incomplete with respect to predecessors, LLVM's may not
         for (auto *pred : predecessors(PhiBB)) {
+            PHINode *PhiN = VN ? VN : TindexN;
             bool found = false;
-            for (size_t i = 0; i < VN->getNumIncomingValues(); ++i) {
-                found = pred == VN->getIncomingBlock(i);
+            for (size_t i = 0; i < PhiN->getNumIncomingValues(); ++i) {
+                found = pred == PhiN->getIncomingBlock(i);
                 if (found)
                     break;
             }
             if (!found) {
-                VN->addIncoming(UndefValue::get(VN->getType()), pred);
+                if (VN) {
+                    VN->addIncoming(UndefValue::get(VN->getType()), pred);
+                }
                 if (TindexN) {
                     TindexN->addIncoming(UndefValue::get(TindexN->getType()), pred);
                 }
