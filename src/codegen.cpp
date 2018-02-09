@@ -3537,7 +3537,6 @@ static void emit_phinode_assign(jl_codectx_t &ctx, jl_value_t *l, jl_value_t *r)
         return;
     }
     jl_cgval_t slot;
-    vtype->dump();
     PHINode *value_phi = NULL;
     if (vtype->isAggregateType()) {
         value_phi = PHINode::Create(vtype->getPointerTo(AddressSpace::Derived),
@@ -5871,8 +5870,8 @@ static std::unique_ptr<Module> emit_function(
             jl_value_t **args = (jl_value_t**)jl_array_data(expr->args);
             jl_value_t *cond = args[0];
             int lname = jl_unbox_long(args[1]);
-            come_from_bb[cursor+1] = ctx.builder.GetInsertBlock();
             Value *isfalse = emit_condition(ctx, cond, "if");
+            come_from_bb[cursor+1] = ctx.builder.GetInsertBlock();
             if (do_malloc_log(props.in_user_code) && props.line != -1)
                 mallocVisitLine(ctx, props.file, props.line);
             bool next_is_label = jl_is_labelnode(jl_array_ptr_ref(stmts, cursor+1));
