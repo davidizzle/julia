@@ -5979,9 +5979,13 @@ static std::unique_ptr<Module> emit_function(
                         }
                     } else {
                         jl_cgval_t new_union = convert_julia_type(ctx, val, phiType);
-                        emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
                         V = new_union.Vboxed;
-                        RTindex = compute_tindex_unboxed(ctx, new_union, phiType);
+                        if (TindexN) {
+                            emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
+                            RTindex = compute_tindex_unboxed(ctx, new_union, phiType);
+                        } else if (!V) {
+                            V = boxed(ctx, val);
+                        }
                     }
                 } else {
                     jl_cgval_t new_union = convert_julia_type(ctx, val, phiType);
