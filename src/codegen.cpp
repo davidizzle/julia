@@ -5954,7 +5954,7 @@ static std::unique_ptr<Module> emit_function(
             if (!jl_is_uniontype(phiType)) {
                 if (VN->getType() == T_prjlvalue) {
                     V = boxed(ctx, val);
-                } else if (VN->getType()->isPointerTy() && !val.constant) {
+                } else if (VN->getType()->isPointerTy()) {
                     V = maybe_bitcast(ctx,
                             decay_derived(data_pointer(ctx, val)),
                             VN->getType());
@@ -5983,6 +5983,7 @@ static std::unique_ptr<Module> emit_function(
                         if (TindexN) {
                             emit_unionmove(ctx, PhiAlloca, new_union, NULL, false, NULL);
                             RTindex = compute_tindex_unboxed(ctx, new_union, phiType);
+                            RTindex = ctx.builder.CreateOr(RTindex, ConstantInt::get(T_int8, 0x80));
                         } else if (!V) {
                             V = boxed(ctx, val);
                         }
