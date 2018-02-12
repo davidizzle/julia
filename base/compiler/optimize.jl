@@ -281,7 +281,7 @@ function optimize(me::InferenceState)
         gotoifnot_elim_pass!(opt)
         inlining_pass!(opt, opt.src.propagate_inbounds)
         any_enter = any(x->isa(x, Expr) && x.head == :enter, opt.src.code)
-        if !any_enter && isdefined(@__MODULE__, :NewOptimizer)
+        if !any_enter && isdefined(@__MODULE__, :NewOptimizer) && !isa(opt.linfo.def, Module)
             reindex_labels!(opt)
             nargs = Int(opt.linfo.def.nargs)-1
             ir = NewOptimizer.run_passes(opt.src, opt.mod, nargs)
