@@ -187,6 +187,10 @@ function exprtype(@nospecialize(x), src, mod::Module)
         return AbstractEvalConstant((x::QuoteNode).value)
     elseif isa(x, GlobalRef)
         return abstract_eval_global(x.mod, (x::GlobalRef).name)
+    elseif isa(x, PhiNode)
+        return Any
+    elseif isa(x, PiNode)
+        return x.typ
     else
         return AbstractEvalConstant(x)
     end

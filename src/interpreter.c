@@ -516,22 +516,6 @@ SECT_INTERP static jl_value_t *eval_body(jl_array_t *stmts, interpreter_state *s
 #endif
             return val;
         }
-        else if (jl_is_phinode(stmt)) {
-            jl_array_t *edges = (jl_array_t*)jl_fieldref_noalloc(stmt, 0);
-            ssize_t edge = -1;
-            for (int i = 0; i < jl_array_len(edges); ++i) {
-                size_t from = jl_unbox_long(jl_arrayref(edges, i));
-                if (from == s->last_branch) {
-                    edge = i;
-                    break;
-                }
-            }
-            if (edge == -1) {
-                jl_error("PhiNode edges do not contain last branch");
-            }
-            jl_value_t *val = jl_arrayref((jl_array_t*)jl_fieldref_noalloc(stmt, 1), edge);
-            return eval_value(val, s);
-        }
         else if (jl_is_expr(stmt)) {
             // Most exprs are allowed to end a BB by fall through
             s->last_branch = s->ip;
@@ -541,7 +525,25 @@ SECT_INTERP static jl_value_t *eval_body(jl_array_t *stmts, interpreter_state *s
             }
             else if (head == assign_sym) {
                 jl_value_t *sym = jl_exprarg(stmt, 0);
-                jl_value_t *rhs = eval_value(jl_exprarg(stmt, 1), s);
+                jl_value_t *rhs = NULL;
+                if (jl_is_phinode(jl_exprarg(stmt, 1))) {
+                    jl_array_t *edges = (jl_array_t*)jl_fieldref_noalloc(jl_exprarg(stmt, 1), 0);
+                    ssize_t edge = -1;
+                    for (int i = 0; i < jl_array_len(edges); ++i) {
+                        size_t from = jl_unbox_long(jl_arrayref(edges, i));
+                        if (from == s->last_branch) {
+                            edge = i;
+                            break;
+                        }
+                    }
+                    if (edge == -1) {
+                        jl_error("PhiNode edges do not contain last branch");
+                    }
+                    jl_value_t *val = jl_arrayref((jl_array_t*)jl_fieldref_noalloc(jl_exprarg(stmt, 1), 1), edge);
+                    rhs = eval_value(val, s);
+                } else {
+                    rhs = eval_value(jl_exprarg(stmt, 1), s);
+                }
                 if (jl_is_ssavalue(sym)) {
                     ssize_t genid = ((jl_ssavalue_t*)sym)->id;
                     if (genid >= jl_source_nssavalues(s->src) || genid < 0)
