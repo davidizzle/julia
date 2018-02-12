@@ -5910,10 +5910,10 @@ static std::unique_ptr<Module> emit_function(
             jl_value_t *value = jl_array_ptr_ref(values, i);
             Value *V = NULL;
             BasicBlock *IncomingBB = come_from_bb[edge];
-            if (BB_rewrite_map.count(IncomingBB)) {
-                IncomingBB = BB_rewrite_map[IncomingBB];
-            }
             BasicBlock *FromBB = IncomingBB;
+            if (BB_rewrite_map.count(FromBB)) {
+                FromBB = BB_rewrite_map[IncomingBB];
+            }
             ctx.builder.SetInsertPoint(FromBB->getTerminator());
             jl_cgval_t val;
             if (!value || jl_is_ssavalue(value)) {
@@ -5952,7 +5952,9 @@ static std::unique_ptr<Module> emit_function(
                 ctx.builder.SetInsertPoint(FromBB);
             }
             if (!jl_is_uniontype(phiType)) {
-                if (VN->getType() == T_prjlvalue) {
+                if (val.typ == (jl_value_t*)jl_bottom_type) {
+                    V = UndefValue::get(VN->getType());
+                } else if (VN->getType() == T_prjlvalue) {
                     V = boxed(ctx, val);
                 } else if (VN->getType()->isPointerTy()) {
                     V = maybe_bitcast(ctx,
@@ -6002,11 +6004,11 @@ static std::unique_ptr<Module> emit_function(
             ctx.builder.CreateBr(PhiBB);
             // Check any phi nodes in the Phi block to see if by splitting the edges,
             // we made things inconsistent
-            if (IncomingBB != ctx.builder.GetInsertBlock()) {
+            if (FromBB != ctx.builder.GetInsertBlock()) {
                 BB_rewrite_map[IncomingBB] = ctx.builder.GetInsertBlock();
                 for (BasicBlock::iterator I = PhiBB->begin(); isa<PHINode>(I); ++I) {
                     PHINode *PN = cast<PHINode>(I);
-                    ssize_t BBIdx = PN->getBasicBlockIndex(IncomingBB);
+                    ssize_t BBIdx = PN->getBasicBlockIndex(FromBB);
                     if (BBIdx == -1)
                         continue;
                     PN->setIncomingBlock(BBIdx, ctx.builder.GetInsertBlock());
