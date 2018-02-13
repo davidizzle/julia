@@ -2,16 +2,23 @@
 
 module Sort
 
-using Base.Order, Base.Checked
-using Base: copymutable, linearindices, IndexStyle, viewindexing, IndexLinear, _length
+import ..@__MODULE__, ..parentmodule
+const Base = parentmodule(@__MODULE__)
+using .Base.Order
+using .Base: copymutable, linearindices, IndexStyle, viewindexing, IndexLinear, _length, colon,
+    eachindex, axes, first, last, similar, start, next, done, zip, @views, OrdinalRange,
+    AbstractVector, @inbounds, AbstractRange, @eval, @inline, Vector, @noinline,
+    AbstractMatrix, AbstractUnitRange, isless, identity, eltype, >, <, <=, >=, |, +, -, *, !,
+    extrema, sub_with_overflow, add_with_overflow, oneunit, div, getindex, setindex!
+using .Base: >>>, !==
 
-import
-    Base.sort,
-    Base.sort!,
-    Base.issorted,
-    Base.sortperm,
-    Base.Slice,
-    Base.to_indices
+import .Base:
+    sort,
+    sort!,
+    issorted,
+    sortperm,
+    Slice,
+    to_indices
 
 export # also exported by Base
     # order-only:
@@ -983,6 +990,7 @@ slice_dummy(::AbstractUnitRange{T}) where {T} = oneunit(T)
 module Float
 using ..Sort
 using ...Order
+using ..Base: @inbounds, AbstractVector, Vector, last, axes
 
 import Core.Intrinsics: slt_int
 import ..Sort: sort!

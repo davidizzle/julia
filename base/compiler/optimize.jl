@@ -1,5 +1,7 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+include("compiler/ssair/driver.jl")
+
 #####################
 # OptimizationState #
 #####################
@@ -282,11 +284,12 @@ function optimize(me::InferenceState)
         inlining_pass!(opt, opt.src.propagate_inbounds)
         any_enter = any(x->isa(x, Expr) && x.head == :enter, opt.src.code)
         any_phi = any(x->isa(x, PhiNode) || (isa(x, Expr) && x.head == :(=) && isa(x.args[2], PhiNode)), opt.src.code)
-        if !any_enter && isdefined(@__MODULE__, :NewOptimizer) && !isa(opt.linfo.def, Module)
+        if !any_enter && !isa(opt.linfo.def, Module)
             reindex_labels!(opt)
             nargs = Int(opt.linfo.def.nargs)-1
-            ir = NewOptimizer.run_passes(opt.src, opt.mod, nargs)
-            NewOptimizer.replace_code!(opt.src, ir, nargs)
+            ccall(:jl_, Cvoid, (Any, ), opt.linfo.specTypes)
+            ir = run_passes(opt.src, opt.mod, nargs)
+            replace_code!(opt.src, ir, nargs)
         elseif !any_phi
             # Clean up after inlining
             gotoifnot_elim_pass!(opt)
