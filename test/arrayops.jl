@@ -1140,6 +1140,14 @@ end
     @test @views mightalias(B[:], A[:])
     @test @views mightalias(B[1:2], A[1:2])
     @test @views !mightalias(B[1:end÷2], A[end÷2+1:end])
+
+    AA = [[1],[2]]
+    @test @views mightalias(AA, AA[:])
+    @test @views mightalias(AA[:], AA[:])
+    @test @views mightalias(AA[1:1], AA[1:2])
+    @test @views !mightalias(AA[1:0], AA)
+    @test @views !mightalias(AA, AA[1:0])
+    @test @views !mightalias(AA[:], AA[1:0])
 end
 
 @testset "lexicographic comparison" begin
@@ -1896,7 +1904,7 @@ end
 ###
 ### IndexCartesian workout
 ###
-struct LinSlowMatrix{T} <: DenseArray{T,2}
+struct LinSlowMatrix{T} <: AbstractArray{T,2}
     data::Matrix{T}
 end
 
