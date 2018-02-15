@@ -168,15 +168,19 @@ function type_lift_pass!(ir::IRCode)
                 end
                 continue
             end
+            ccall(:jl_, Cvoid, (Any,), (stmt_id, def))
             if !haskey(lifted_undef, stmt_id)
                 first = true
                 while !isempty(worklist)
                     item, which, use = pop!(worklist)
+                    def = ir.stmts[item]
                     edges = copy(def.edges)
                     values = Vector{Any}(uninitialized, length(edges))
                     new_phi = insert_node!(ir, item, Bool, PhiNode(edges, values))
                     processed[item] = new_phi
+                    ccall(:jl_, Cvoid, (Any,), (item, new_phi))
                     if first
+                        ccall(:jl_, Cvoid, (Any,), ("new_phi", new_phi))
                         lifted_undef[stmt_id] = new_phi
                         first = false
                     end
@@ -212,6 +216,7 @@ function type_lift_pass!(ir::IRCode)
                     end
                 end
             end
+            ccall(:jl_, Cvoid, (Any,), lifted_undef[stmt_id])
             if isexpr(stmt, :isdefiend)
                 ir.stmts[idx] = lifted_undef[stmt_id]
             else

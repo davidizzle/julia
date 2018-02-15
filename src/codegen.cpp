@@ -5914,6 +5914,15 @@ static std::unique_ptr<Module> emit_function(
             if (BB_rewrite_map.count(FromBB)) {
                 FromBB = BB_rewrite_map[IncomingBB];
             }
+#ifndef JL_NDEBUG
+            bool found_pred = false;
+            for (BasicBlock *pred : predecessors(PhiBB)) {
+                found_pred = pred == FromBB;
+                if (found_pred)
+                    break;
+            }
+            assert(found_pred);
+#endif
             ctx.builder.SetInsertPoint(FromBB->getTerminator());
             jl_cgval_t val;
             if (!value || jl_is_ssavalue(value)) {

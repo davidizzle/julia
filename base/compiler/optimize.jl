@@ -290,6 +290,10 @@ function optimize(me::InferenceState)
             ccall(:jl_, Cvoid, (Any, ), opt.linfo.specTypes)
             ir = run_passes(opt.src, opt.mod, nargs)
             replace_code!(opt.src, ir, nargs)
+            #comp = ccall(:jl_compress_ast, Any, (Any, Any), opt.linfo.def, opt.src)
+            #Core.println(opt.linfo.def.roots)
+            #ccall(:jl_, Cvoid, (Any,), comp)
+            #ccall(:jl_, Cvoid, (Any,), opt.src.code)
         elseif !any_phi
             # Clean up after inlining
             gotoifnot_elim_pass!(opt)

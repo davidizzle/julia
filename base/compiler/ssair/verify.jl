@@ -23,6 +23,10 @@ function verify_ir(ir::IRCode)
         if isa(stmt, PhiNode)
             @assert length(stmt.edges) == length(stmt.values)
             for i = 1:length(stmt.edges)
+                edge = stmt.edges[i]
+                if !(edge in ir.cfg.blocks[bb].preds)
+                    error()
+                end
                 isassigned(stmt.values, i) || continue
                 val = stmt.values[i]
                 phiT = ir.types[idx]
@@ -41,7 +45,7 @@ function verify_ir(ir::IRCode)
                     end
                     =#
                 end
-                check_op(ir, domtree, val, stmt.edges[i], last(ir.cfg.blocks[stmt.edges[i]].stmts)+1)
+                check_op(ir, domtree, val, edge, last(ir.cfg.blocks[stmt.edges[i]].stmts)+1)
             end
         else
             for op in userefs(stmt)
