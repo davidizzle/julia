@@ -5,7 +5,6 @@ function check_op(ir, domtree, op, use_bb, use_idx)
             @assert op.id < use_idx
         else
             if !dominates(domtree, def_bb, use_bb)
-                #@show op
                 #@error "Basic Block $def_bb does not dominate block $use_bb"
                 error()
             end

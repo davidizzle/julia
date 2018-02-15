@@ -217,7 +217,7 @@ function type_lift_pass!(ir::IRCode)
             else
                 ir.stmts[idx] = Expr(:throw_undef_if_not, stmt.args[1], lifted_undef[stmt_id])
             end
-        else
+        elseif false #= TODO: Re-enable this =#
             x = get_val_if_type_cmp(stmt, ir)
             x === nothing && continue
             val, cmp = x

@@ -246,7 +246,8 @@ function construct_ssa!(ci, mod, cfg, domtree, defuse, nargs)
     for (idx, slot) in Iterators.enumerate(defuse)
         # No uses => no need for phi nodes
         isempty(slot.uses) && continue
-        if length(slot.defs) == 1 && slot.any_newvar
+        # TODO: Restore this optimization
+        if false # length(slot.defs) == 1 && slot.any_newvar
             if slot.defs[] == 0
                 typ = ci.slottypes[idx]
                 ssaval = Argument(idx)

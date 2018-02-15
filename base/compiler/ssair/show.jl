@@ -1,4 +1,3 @@
-
 function Base.show(io::IO, cfg::CFG)
     foreach(pairs(cfg.blocks)) do (idx, block)
         println("$idx\t=>\t", join(block.succs, ", "))
@@ -6,8 +5,63 @@ function Base.show(io::IO, cfg::CFG)
 end
 
 print_ssa(io::IO, val) = isa(val, SSAValue) ? print(io, "%$(val.id)") : print(io, val)
+function print_node(io::IO, idx, stmt, used, maxsize; color = true, print_typ=true)
+    if idx in used
+        pad = " "^(maxsize-length(string(idx)))
+        print(io, "%$idx $pad= ")
+    else
+        print(io, " "^(maxsize+4))
+    end
+    if isa(stmt, PhiNode)
+        args = map(1:length(stmt.edges)) do i
+            e = stmt.edges[i]
+            v = !isassigned(stmt.values, i) ? "#undef" :
+                sprint() do io′
+                    print_ssa(io′, stmt.values[i])
+                end
+            "$e => $v"
+        end
+        print(io, "φ ", '(', join(args, ", "), ')')
+    elseif isa(stmt, PiNode)
+        print(io, "π (")
+        print_ssa(io, stmt.val)
+        print(io, ", ")
+        if color
+            printstyled(io, stmt.typ, color=:red)
+        else
+            print(io, stmt.typ)
+        end
+        print(io, ")")
+    elseif isa(stmt, ReturnNode)
+        if !isdefined(stmt, :val)
+            print(io, "unreachable")
+        else
+            print(io, "return ")
+            print_ssa(io, stmt.val)
+        end
+    elseif isa(stmt, GotoIfNot)
+        print(io, "goto ", stmt.dest, " if not ")
+        print_ssa(io, stmt.cond)
+    elseif isexpr(stmt, :call)
+        print_ssa(io, stmt.args[1])
+        print(io, "(")
+        print(io, join(map(arg->sprint(io->print_ssa(io, arg)), stmt.args[2:end]), ", "))
+        print(io, ")")
+        if print_typ && stmt.typ !== Any
+            print(io, "::$(stmt.typ)")
+        end
+    elseif isexpr(stmt, :new)
+        print(io, "new(")
+        print(io, join(map(arg->sprint(io->print_ssa(io, arg)), stmt.args), ", "))
+        print(io, ")")
+    else
+        print(io, stmt)
+    end
+end
+
 function Base.show(io::IO, code::IRCode)
-    used = IdSet{Int}()
+    io = IOContext(io, :color=>true)
+    used = Set{Int}()
     println(io, "Code")
     foreach(stmt->scan_ssa_use!(used, stmt), code.stmts)
     foreach(((_a,_b,node),)->scan_ssa_use!(used, node), code.new_nodes)
@@ -24,6 +78,7 @@ function Base.show(io::IO, code::IRCode)
     new_nodes_perm = Iterators.Stateful(perm)
     for (idx, stmt) in Iterators.enumerate(code.stmts)
         bbrange = cfg.blocks[bb_idx].stmts
+	bbrange = bbrange.first:bbrange.last
         bb_pad = max_bb_idx_size - length(string(bb_idx))
         if idx != last(bbrange)
             if idx == first(bbrange)

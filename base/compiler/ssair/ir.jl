@@ -266,60 +266,6 @@ function foreachssa(f, stmt)
     end
 end
 
-function print_node(io::IO, idx, stmt, used, maxsize; color = true, print_typ=true)
-    if idx in used
-        pad = " "^(maxsize-length(string(idx)))
-        print(io, "%$idx $pad= ")
-    else
-        print(io, " "^(maxsize+4))
-    end
-    if isa(stmt, PhiNode)
-        args = map(1:length(stmt.edges)) do i
-            e = stmt.edges[i]
-            v = !isassigned(stmt.values, i) ? "#undef" :
-                sprint() do io′
-                    print_ssa(io′, stmt.values[i])
-                end
-            "$e => $v"
-        end
-        print(io, "φ ", '(', join(args, ", "), ')')
-    elseif isa(stmt, PiNode)
-        print(io, "π (")
-        print_ssa(io, stmt.val)
-        print(io, ", ")
-        if color
-            printstyled(io, stmt.typ, color=:red)
-        else
-            print(io, stmt.typ)
-        end
-        print(io, ")")
-    elseif isa(stmt, ReturnNode)
-        if !isdefined(stmt, :val)
-            print(io, "unreachable")
-        else
-            print(io, "return ")
-            print_ssa(io, stmt.val)
-        end
-    elseif isa(stmt, GotoIfNot)
-        print(io, "goto ", stmt.dest, " if not ")
-        print_ssa(io, stmt.cond)
-    elseif isexpr(stmt, :call)
-        print_ssa(io, stmt.args[1])
-        print(io, "(")
-        print(io, join(map(arg->sprint(io->print_ssa(io, arg)), stmt.args[2:end]), ", "))
-        print(io, ")")
-        if print_typ && stmt.typ !== Any
-            print(io, "::$(stmt.typ)")
-        end
-    elseif isexpr(stmt, :new)
-        print(io, "new(")
-        print(io, join(map(arg->sprint(io->print_ssa(io, arg)), stmt.args), ", "))
-        print(io, ")")
-    else
-        print(io, stmt)
-    end
-end
-
 function insert_node!(ir::IRCode, pos, typ, val)
     push!(ir.new_nodes, (pos, typ, val))
     return SSAValue(length(ir.stmts) + length(ir.new_nodes))
