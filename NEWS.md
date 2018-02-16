@@ -434,6 +434,9 @@ Library improvements
   * The function `thisind(s::AbstractString, i::Integer)` returns the largest valid index
     less or equal than `i` in the string `s` or `0` if no such index exists ([#24414]).
 
+  * `String(array)` now accepts an arbitrary `AbstractVector{UInt8}`, and resizes
+    `Vector{UInt8}` inputs to a zero length to prevent incorrect modification ([#26089]).
+
   * `Irrational` is now a subtype of `AbstractIrrational` ([#24245]).
 
   * Introduced the `empty` function, the functional pair to `empty!` which returns a new,
@@ -1324,3 +1327,4 @@ Command-line option changes
 [#25745]: https://github.com/JuliaLang/julia/issues/25745
 [#25896]: https://github.com/JuliaLang/julia/issues/25896
 [#25998]: https://github.com/JuliaLang/julia/issues/25998
+[#26089]: https://github.com/JuliaLang/julia/issues/26089
