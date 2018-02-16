@@ -8,6 +8,16 @@ using Random
     @test String("abc!") == "abc!"
     @test String(0x61:0x63) == "abc"
 
+    # Check that resizing empty source vector does not corrupt string
+    b = IOBuffer()
+    write(b, "ab")
+    x = take!(b)
+    s = String(x)
+    resize!(x, 0)
+    @test s == "ab"
+    resize!(x, 1)
+    @test s == "ab"
+
     @test isempty(string())
     @test eltype(GenericString) == Char
     @test firstindex("abc") == 1

@@ -2343,3 +2343,18 @@ Base.view(::T25958, args...) = args
     @test t[end,end,1]   == @view(t[end,end,1])   == @views t[end,end,1]
     @test t[end,end,end] == @view(t[end,end,end]) == @views t[end,end,end]
 end
+
+# resize! sets the last element to zero when element size is one byte
+@testset "check that resize! is a no-op when size does not change" for T in (Int, UInt8, Int8)
+    x = Vector{T}(uninitialized, 1)
+    resize!(x, 0)
+    unsafe_store!(pointer(x), 1, 1)
+    resize!(x, 0)
+    @test unsafe_load(pointer(x), 1) == 1
+
+    x = Vector{T}(uninitialized, 2)
+    resize!(x, 1)
+    unsafe_store!(pointer(x), 1, 2)
+    resize!(x, 1)
+    @test unsafe_load(pointer(x), 2) == 1
+end
