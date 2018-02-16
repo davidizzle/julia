@@ -154,6 +154,20 @@ function type_lift_pass!(ir::IRCode)
             # undef can only show up by being introduced in a phi
             # node, so lift all phi nodes that have maybe undef values
             processed = IdDict{Int, SSAValue}()
+            if !isa(val, SSAValue)
+                if isexpr(stmt, :isdefined)
+                    if isexpr(stmt.args[1], :static_parameter)
+                        continue
+                    end
+                end
+                ccall(:jl_, Cvoid, (Any,), val)
+                if isexpr(stmt, :isdefiend)
+                    ir.stmts[idx] = true
+                else
+                    ir.stmts[idx] = nothing
+                end
+                continue
+            end
             worklist = Tuple{Int, SSAValue, Int}[(val.id, SSAValue(0), 0)]
             stmt_id = val.id
             while isa(ir.stmts[stmt_id], PiNode)

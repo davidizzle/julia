@@ -25,7 +25,7 @@ function replace_code!(ci::CodeInfo, code::IRCode, nargs)
     mapping = IdDict{Int, Int}()
     n = 0
     resize!(ci.ssavaluetypes, length(used))
-    for ssa in sort(collect(used))
+    for ssa in sort(Int[x for x in used])
         mapping[ssa] = n
         n += 1
         ci.ssavaluetypes[n] = code.types[ssa]

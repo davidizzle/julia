@@ -2269,8 +2269,10 @@ static Value *emit_f_is(jl_codectx_t &ctx, const jl_cgval_t &arg1, const jl_cgva
         Value *varg2 = arg2.constant ? literal_pointer_val(ctx, arg2.constant) : arg2.V;
         assert(varg1 && varg2 && (arg1.isboxed || arg1.TIndex) && (arg2.isboxed || arg2.TIndex) &&
                 "Only boxed types are valid for pointer comparison.");
-        return ctx.builder.CreateICmpEQ(decay_derived(varg1),
-                                        decay_derived(varg2));
+        varg1 = decay_derived(varg1);
+        varg2 = decay_derived(varg2);
+        return ctx.builder.CreateICmpEQ(emit_bitcast(ctx, varg1, T_pint8),
+                                        emit_bitcast(ctx, varg2, T_pint8));
     }
 
     Value *varg1 = mark_callee_rooted(boxed(ctx, arg1));
@@ -5928,8 +5930,12 @@ static std::unique_ptr<Module> emit_function(
             if (!value || jl_is_ssavalue(value)) {
                 ssize_t idx = value ? ((jl_ssavalue_t*)value)->id : 0;
                 if (!value || !ctx.ssavalue_assigned.at(idx)) {
-                    if (VN)
-                        VN->addIncoming(UndefValue::get(VN->getType()), FromBB);
+                    if (VN) {
+                        Value *undef = VN->getType() == T_prjlvalue ?
+                            (llvm::Value*)ConstantPointerNull::get(cast<PointerType>(T_prjlvalue)) :
+                            (llvm::Value*)UndefValue::get(VN->getType());
+                        VN->addIncoming(undef, FromBB);
+                    }
                     if (TindexN)
                         TindexN->addIncoming(UndefValue::get(T_int8), FromBB);
                     continue;
@@ -5974,6 +5980,8 @@ static std::unique_ptr<Module> emit_function(
                 }
                 VN->addIncoming(V, ctx.builder.GetInsertBlock());
                 assert(!TindexN);
+            } else if (!TindexN) {
+                VN->addIncoming(boxed(ctx, val), ctx.builder.GetInsertBlock());
             } else {
                 Value *RTindex = NULL;
                 if (jl_is_concrete_type(val.typ)) {
@@ -6034,7 +6042,10 @@ static std::unique_ptr<Module> emit_function(
             }
             if (!found) {
                 if (VN) {
-                    VN->addIncoming(UndefValue::get(VN->getType()), pred);
+                    Value *undef = VN->getType() == T_prjlvalue ?
+                        (llvm::Value*)ConstantPointerNull::get(cast<PointerType>(T_prjlvalue)) :
+                        (llvm::Value*)UndefValue::get(VN->getType());
+                    VN->addIncoming(undef, pred);
                 }
                 if (TindexN) {
                     TindexN->addIncoming(UndefValue::get(TindexN->getType()), pred);

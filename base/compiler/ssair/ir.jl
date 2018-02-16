@@ -80,7 +80,7 @@ function compute_basic_blocks(stmts::Vector{Any})
     basic_block_index = Int[]
     blocks = BasicBlock[]
     sizehint!(blocks, length(bb_starts)-1)
-    foreach(Iterators.zip(bb_starts, Iterators.drop(bb_starts, 1))) do (first, last)
+    for (first, last) in Iterators.zip(bb_starts, Iterators.drop(bb_starts, 1))
         push!(basic_block_index, first)
         push!(blocks, BasicBlock(StmtRange(first, last-1)))
     end
@@ -187,7 +187,7 @@ function is_relevant_expr(e::Expr)
     isexpr(e, :throw_undef_if_not)
 end
 
-function setindex!(x::UseRef, v)
+function setindex!(x::UseRef, @nospecialize(v))
     stmt = x.urs.stmt
     if isa(stmt, Expr) && is_relevant_expr(stmt)
         x.use > length(stmt.args) && throw(BoundsError())
@@ -271,6 +271,16 @@ function insert_node!(ir::IRCode, pos, typ, val)
     return SSAValue(length(ir.stmts) + length(ir.new_nodes))
 end
 
+# For bootstrapping
+function my_sortperm(v)
+    p = Vector{Int}(uninitialized, length(v))
+    for i = 1:length(v)
+        p[i] = i
+    end
+    sort!(p, Sort.DEFAULT_UNSTABLE, Order.Perm(Sort.Forward,v))
+    p
+end
+
 mutable struct IncrementalCompact
     ir::IRCode
     result::Vector{Any}
@@ -279,17 +289,19 @@ mutable struct IncrementalCompact
     used_ssas::Vector{Int}
     late_fixup::Vector{Int}
     keep_meta::Bool
-    new_nodes_perm::Any
+    # This could be Stateful, but bootstrapping doesn't like that
+    perm::Vector{Int}
+    new_nodes_idx::Int
     idx::Int
     result_idx::Int
     function IncrementalCompact(code::IRCode; keep_meta = false)
-        new_nodes_perm = Iterators.Stateful(sortperm(code.new_nodes, by=x->x[1]))
+        perm = my_sortperm(Int[code.new_nodes[i][1] for i in 1:length(code.new_nodes)])
         result = Array{Any}(uninitialized, length(code.stmts) + length(code.new_nodes))
         result_types = Array{Any}(uninitialized, length(code.stmts) + length(code.new_nodes))
         ssa_rename = Any[SSAValue(i) for i = 1:(length(code.stmts) + length(code.new_nodes))]
         late_fixup = Vector{Int}()
-        used_ssas = fill(0, length(code.stmts) + length(code.new_nodes))
-        new(code, result, result_types, ssa_rename, used_ssas, late_fixup, keep_meta, new_nodes_perm, 1, 1)
+        used_ssas = Int[0 for _ in 1:(length(code.stmts) + length(code.new_nodes))]
+        new(code, result, result_types, ssa_rename, used_ssas, late_fixup, keep_meta, perm, 1, 1, 1)
     end
 end
 
@@ -346,10 +358,12 @@ end
 
 start(compact::IncrementalCompact) = (1,1,1)
 function done(compact::IncrementalCompact, (idx, _a, _b)::Tuple{Int, Int, Int})
-    return idx > length(compact.ir.stmts) && isempty(compact.new_nodes_perm)
+    return idx > length(compact.ir.stmts) && (compact.new_nodes_idx > length(compact.perm))
 end
 
-function process_node!(result, result_idx, ssa_rename, late_fixup, used_ssas, stmt, idx, processed_idx, keep_meta)
+function process_node!(result::Vector{Any}, result_idx::Int, ssa_rename::Vector{Any},
+        late_fixup::Vector{Int}, used_ssas::Vector{Int}, @nospecialize(stmt),
+        idx::Int, processed_idx::Int, keep_meta::Bool)
     ssa_rename[idx] = SSAValue(result_idx)
     if stmt === nothing
         ssa_rename[idx] = stmt
@@ -390,7 +404,7 @@ function process_node!(result, result_idx, ssa_rename, late_fixup, used_ssas, st
     end
     return result_idx
 end
-function process_node!(compact::IncrementalCompact, result_idx, stmt, idx, processed_idx)
+function process_node!(compact::IncrementalCompact, result_idx::Int, @nospecialize(stmt), idx::Int, processed_idx::Int)
     process_node!(compact.result, result_idx, compact.ssa_rename,
         compact.late_fixup, compact.used_ssas, stmt, idx, processed_idx, compact.keep_meta)
 end
@@ -401,8 +415,9 @@ function next(compact::IncrementalCompact, (idx, active_bb, old_result_idx)::Tup
         resize!(compact.result_types, old_result_idx)
     end
     bb = compact.ir.cfg.blocks[active_bb]
-    if !isempty(compact.new_nodes_perm) && compact.ir.new_nodes[peek(compact.new_nodes_perm)][1] == idx
-        new_idx = popfirst!(compact.new_nodes_perm)
+    if compact.new_nodes_idx <= length(compact.perm) && compact.ir.new_nodes[compact.perm[compact.new_nodes_idx]][1] == idx
+        new_idx = compact.perm[compact.new_nodes_idx]
+        compact.new_nodes_idx += 1
         _, typ, new_node = compact.ir.new_nodes[new_idx]
         new_idx += length(compact.ir.stmts)
         compact.result_types[old_result_idx] = typ
@@ -501,7 +516,10 @@ end
 function compact!(code::IRCode)
     compact = IncrementalCompact(code)
     # Just run through the iterator without any processing
-    foreach(_->nothing, compact)
+    state = start(compact)
+    while !done(compact, state)
+        _, state = next(compact, state)
+    end
     return finish(compact)
 end
 

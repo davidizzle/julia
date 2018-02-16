@@ -9,7 +9,9 @@ using .Base: copymutable, linearindices, IndexStyle, viewindexing, IndexLinear, 
     eachindex, axes, first, last, similar, start, next, done, zip, @views, OrdinalRange,
     AbstractVector, @inbounds, AbstractRange, @eval, @inline, Vector, @noinline,
     AbstractMatrix, AbstractUnitRange, isless, identity, eltype, >, <, <=, >=, |, +, -, *, !,
-    extrema, sub_with_overflow, add_with_overflow, oneunit, div, getindex, setindex!
+    extrema, sub_with_overflow, add_with_overflow, oneunit, div, getindex, setindex!,
+    length, resize!, fill
+    
 using .Base: >>>, !==
 
 import .Base:
@@ -826,7 +828,11 @@ function sortperm_int_range(x::Vector{<:Integer}, rangelen, minval)
     @inbounds for i = 1:n
         where[x[i] + offs + 1] += 1
     end
-    cumsum!(where, where)
+
+    #cumsum!(where, where)
+    @inbounds for i = 2:length(where)
+        where[i] += where[i-1]
+    end
 
     P = Vector{Int}(uninitialized, n)
     @inbounds for i = 1:n

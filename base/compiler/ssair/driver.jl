@@ -19,7 +19,7 @@ end
 
 function run_passes(ci::CodeInfo, mod::Module, nargs::Int)
     ci.code = copy(ci.code);
-    foreach(1:length(ci.code)) do i
+    for i = 1:length(ci.code)
         ci.code[i] = normalize(ci.code[i]);
     end
     ci.code = strip_trailing_junk(ci.code);

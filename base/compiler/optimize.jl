@@ -299,16 +299,16 @@ function optimize(me::InferenceState)
             gotoifnot_elim_pass!(opt)
             basic_dce_pass!(opt)
             void_use_elim_pass!(opt)
-            copy_duplicated_expr_pass!(opt)
-            split_undef_flag_pass!(opt)
-            fold_constant_getfield_pass!(opt)
+            #copy_duplicated_expr_pass!(opt)
+            #split_undef_flag_pass!(opt)
+            #fold_constant_getfield_pass!(opt)
             # Compute escape information
             # and elide unnecessary allocations
-            alloc_elim_pass!(opt)
+            #alloc_elim_pass!(opt)
             # Clean up for `alloc_elim_pass!`
-            gotoifnot_elim_pass!(opt)
-            basic_dce_pass!(opt)
-            void_use_elim_pass!(opt)
+            #gotoifnot_elim_pass!(opt)
+            #basic_dce_pass!(opt)
+            #void_use_elim_pass!(opt)
         end
         # Pop metadata before label reindexing
         let code = opt.src.code::Array{Any,1}
