@@ -682,6 +682,8 @@ JL_NO_ASAN static void ctx_switch(jl_task_t *lastt)
 
 JL_DLLEXPORT void jl_switch(void) JL_NOTSAFEPOINT_LEAVE JL_NOTSAFEPOINT_ENTER
 {
+    jl_schedule_interrupt_handler();
+
     jl_task_t *ct = jl_current_task;
     jl_ptls_t ptls = ct->ptls;
     jl_task_t *t = ptls->next_task;

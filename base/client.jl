@@ -256,6 +256,9 @@ function exec_options(opts)
     # remove filename from ARGS
     global PROGRAM_FILE = arg_is_program ? popfirst!(ARGS) : ""
 
+    # start basic interrupt handler
+    start_simple_interrupt_handler(;force=true)
+
     # Load Distributed module only if any of the Distributed options have been specified.
     distributed_mode = (opts.worker == 1) || (opts.nprocs > 0) || (opts.machine_file != C_NULL)
     if distributed_mode

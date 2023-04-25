@@ -31,6 +31,8 @@ void jl_parallel_gc_threadfun(void *arg);
 void jl_concurrent_gc_threadfun(void *arg);
 void jl_threadfun(void *arg);
 
+extern JL_DLLIMPORT _Atomic(jl_task_t*) jl_interrupt_handler JL_GLOBALLY_ROOTED;
+
 #ifdef __cplusplus
 }
 #endif
