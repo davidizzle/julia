@@ -461,6 +461,7 @@
     XX(jl_too_many_args) \
     XX(jl_toplevel_eval) \
     XX(jl_toplevel_eval_in) \
+    XX(jl_trigger_interrupt_handler) \
     XX(jl_try_substrtod) \
     XX(jl_try_substrtof) \
     XX(jl_tty_set_mode) \
@@ -505,6 +506,7 @@
     XX(jl_ver_string) \
     XX(jl_vexceptionf) \
     XX(jl_vprintf) \
+    XX(jl_want_interrupt_handler) \
     XX(jl_wake_thread) \
     XX(jl_wakeup_thread) \
     XX(jl_write_compiler_output) \

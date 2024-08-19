@@ -240,6 +240,9 @@ JL_DLLEXPORT void jl_atexit_hook(int exitcode) JL_NOTSAFEPOINT_ENTER
         ct = container_of(jl_adopt_thread(), jl_task_t, gcstack);
     }
     else if (ct != NULL) {
+        if (jl_interrupt_handler_condition)
+            jl_close_uv((uv_handle_t *)jl_interrupt_handler_condition);
+
         // we are about to start tearing everything down, so lets try not to get
         // upset by the local mess of things when we run the user's _atexit hooks
         // this also forces us into a GC-unsafe region without a safepoint

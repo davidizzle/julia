@@ -380,6 +380,7 @@ JL_NO_ASAN static void segv_handler(int sig, siginfo_t *info, void *context)
         return;
     }
     if (sig == SIGSEGV && info->si_code == SEGV_ACCERR && jl_addr_is_safepoint((uintptr_t)info->si_addr) && !is_write_fault(context)) {
+        //printf("safepoint boop!\n");
         jl_set_gc_and_wait();
         // Do not raise sigint on worker thread
         if (jl_atomic_load_relaxed(&ct->tid) != 0)
@@ -390,10 +391,16 @@ JL_NO_ASAN static void segv_handler(int sig, siginfo_t *info, void *context)
         // thread. That will quickly be rectified when we rerun the faulting
         // instruction and end up right back here, or we start to run the
         // exception handler and immediately hit the safepoint there.
-        if (ct->ptls->defer_signal) {
+        if (jl_want_interrupt_handler()) {
+            //jl_safe_printf("signal handler: global defer sigint\n");
+            jl_safepoint_defer_sigint();
+        }
+        else if (ct->ptls->defer_signal) {
+            jl_safe_printf("signal handler: PTLS defer sigint\n");
             jl_safepoint_defer_sigint();
         }
         else if (jl_safepoint_consume_sigint()) {
+            jl_safe_printf("signal handler: consume sigint\n");
             jl_clear_force_sigint();
             jl_throw_in_ctx(ct, jl_interrupt_exception, sig, context);
         }
@@ -513,7 +520,8 @@ void jl_thread_resume(int tid)
 static void jl_try_deliver_sigint(void)
 {
     jl_ptls_t ptls2 = jl_atomic_load_relaxed(&jl_all_tls_states)[0];
-    jl_safepoint_enable_sigint();
+    if (!jl_trigger_interrupt_handler())
+        jl_safepoint_enable_sigint();
     jl_wake_libuv();
     pthread_mutex_lock(&in_signal_lock);
     signals_inflight++;
@@ -601,7 +609,10 @@ void usr2_handler(int sig, siginfo_t *info, void *ctx)
     jl_atomic_cmpswap(&ptls->signal_request, &processing, 0);
     if (request == 2) {
         int force = jl_check_force_sigint();
-        if (force || (!ptls->defer_signal && ptls->io_wait)) {
+        int inthand = jl_want_interrupt_handler();
+        if (inthand)
+            jl_safepoint_defer_sigint();
+        if (force || (!ptls->defer_signal && !inthand && ptls->io_wait)) {
             jl_safepoint_consume_sigint();
             // Force a throw
             if (force)
@@ -692,16 +703,6 @@ JL_DLLEXPORT void jl_profile_stop_timer(void)
 
 #endif
 #endif // HAVE_MACH
-
-static void jl_deliver_handled_sigint(void)
-{
-    jl_ptls_t other = jl_atomic_load_relaxed(&jl_all_tls_states)[0];
-    jl_wake_libuv();
-    jl_atomic_store_release(&other->signal_request, 2);
-    // This also makes sure `sleep` is aborted.
-    pthread_kill(other->system_id, SIGUSR2);
-    jl_wake_thread(0);
-}
 
 static void allocate_segv_handler(void)
 {
@@ -891,10 +892,6 @@ static void *signal_listener(void *arg)
             }
             else if (exit_on_sigint) {
                 critical = 1;
-            }
-            else if (want_interrupt_handler()) {
-                jl_deliver_handled_sigint();
-                continue;
             }
             else {
                 jl_try_deliver_sigint();

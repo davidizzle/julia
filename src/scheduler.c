@@ -369,7 +369,12 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *trypoptask, jl_value_t *q, 
     uint64_t start_cycles = 0;
 
     while (1) {
-        jl_schedule_interrupt_handler();
+        int inthand = jl_want_interrupt_handler();
+        //printf("Checking deferral (jl_task_get_next) %d...\n", inthand);
+        if (jl_want_interrupt_handler()) {
+            printf("Scheduling handler!\n");
+            jl_schedule_interrupt_handler();
+        }
 
         jl_task_t *task = get_next_task(trypoptask, q);
         if (task)

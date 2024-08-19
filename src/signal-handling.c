@@ -316,28 +316,44 @@ static void stack_overflow_warning(void)
 
 // Graceful interrupt handler
 
-static _Atomic(int) handle_interrupt = 0;
 JL_DLLEXPORT void jl_schedule_interrupt_handler(void)
 {
-    if (jl_atomic_exchange_relaxed(&handle_interrupt, 0) != 1)
+    if (jl_atomic_exchange_relaxed(&jl_global_defer_signal, 0) != 1) {
+        printf("Deferral not requested???\n");
         return;
+    }
+    jl_safepoint_consume_sigint();
+    assert(!jl_atomic_load(&jl_global_defer_signal));
     jl_task_t *handler = jl_atomic_load_relaxed(&jl_interrupt_handler);
-    if (!handler)
+    if (!handler) {
+        printf("Handler not registered???\n");
         return;
+    }
     assert(jl_is_task(handler));
-    if (jl_atomic_load_relaxed(&handler->_state) != JL_TASK_STATE_RUNNABLE)
+    if (jl_atomic_load_relaxed(&handler->_state) != JL_TASK_STATE_RUNNABLE) {
+        printf("Handler not runnable!\n");
         return;
-    handler->result = jl_interrupt_exception;
-    jl_atomic_store_relaxed(&handler->_isexception, 1);
-    jl_schedule_task(handler);
+    }
+    if (!jl_interrupt_handler_condition) {
+        printf("Handler condition not set!\n");
+        return;
+    }
+    uv_async_send((uv_async_t *)jl_interrupt_handler_condition);
+    printf("Handler triggered!\n");
 }
-static int want_interrupt_handler(void)
+JL_DLLEXPORT int jl_want_interrupt_handler(void)
+{
+    return jl_atomic_load_acquire(&jl_global_defer_signal);
+}
+JL_DLLEXPORT int jl_trigger_interrupt_handler(void)
 {
     if (jl_atomic_load_relaxed(&jl_interrupt_handler)) {
         // Set flag to trigger user handlers on next task switch
-        jl_atomic_store_relaxed(&handle_interrupt, 1);
+        jl_atomic_store_release(&jl_global_defer_signal, 1);
+        printf("Requesting interrupt: %d (%llx)\n", jl_atomic_load_relaxed(&jl_global_defer_signal), &jl_global_defer_signal);
         return 1;
     }
+    printf("No interrupt handler to request\n");
     return 0;
 }
 

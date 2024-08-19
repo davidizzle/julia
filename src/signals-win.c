@@ -48,7 +48,10 @@ static void jl_try_throw_sigint(void)
     jl_safepoint_enable_sigint();
     jl_wake_libuv();
     int force = jl_check_force_sigint();
-    if (force || (!ct->ptls->defer_signal && ct->ptls->io_wait)) {
+    int inthand = jl_want_interrupt_handler();
+    if (inthand)
+        jl_safepoint_defer_sigint();
+    if (force || (!ct->ptls->defer_signal && !inthand && ct->ptls->io_wait)) {
         jl_safepoint_consume_sigint();
         if (force)
             jl_safe_printf("WARNING: Force throwing a SIGINT\n");
@@ -184,7 +187,10 @@ static void jl_try_deliver_sigint(void)
     }
     jl_unlock_profile();
     int force = jl_check_force_sigint();
-    if (force || (!ptls2->defer_signal && ptls2->io_wait)) {
+    int inthand = jl_want_interrupt_handler();
+    if (inthand)
+        jl_safepoint_defer_sigint();
+    if (force || (!ptls2->defer_signal && !inthand && ptls2->io_wait)) {
         jl_safepoint_consume_sigint();
         if (force)
             jl_safe_printf("WARNING: Force throwing a SIGINT\n");
@@ -227,8 +233,7 @@ static BOOL WINAPI sigint_handler(DWORD wsig) //This needs winapi types to guara
     if (!jl_ignore_sigint()) {
         if (exit_on_sigint)
             jl_exit(128 + sig); // 128 + SIGINT
-        if (!want_interrupt_handler())
-            jl_try_deliver_sigint();
+        jl_try_deliver_sigint();
     }
     return 1;
 }
@@ -261,9 +266,8 @@ LONG WINAPI jl_exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo)
                 // Do not raise sigint on worker thread
                 if (ptls->tid != 0)
                     return EXCEPTION_CONTINUE_EXECUTION;
-                if (ptls->defer_signal) {
+                if (ptls->defer_signal || jl_want_interrupt_handler())
                     jl_safepoint_defer_sigint();
-                }
                 else if (jl_safepoint_consume_sigint()) {
                     jl_clear_force_sigint();
                     jl_throw_in_ctx(ct, jl_interrupt_exception, ExceptionInfo->ContextRecord);

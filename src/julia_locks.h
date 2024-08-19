@@ -44,7 +44,7 @@ static inline void jl_mutex_lock_nogc(jl_mutex_t *lock) JL_NOTSAFEPOINT JL_NOTSA
     } while (0)
 #define JL_SIGATOMIC_END() do {                                 \
         jl_signal_fence();                                      \
-        if (--jl_current_task->ptls->defer_signal == 0) {       \
+        if (--jl_current_task->ptls->defer_signal == 0 && !jl_want_interrupt_handler()) {       \
             jl_sigint_safepoint(jl_current_task->ptls);         \
         }                                                       \
     } while (0)
@@ -55,7 +55,7 @@ static inline void jl_mutex_lock_nogc(jl_mutex_t *lock) JL_NOTSAFEPOINT JL_NOTSA
     } while (0)
 #define JL_SIGATOMIC_END_self() do {            \
         jl_signal_fence();                      \
-        if (--self->ptls->defer_signal == 0) {  \
+        if (--self->ptls->defer_signal == 0 && !jl_want_interrupt_handler()) {  \
             jl_sigint_safepoint(self->ptls);    \
         }                                       \
     } while (0)

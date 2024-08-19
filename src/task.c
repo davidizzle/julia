@@ -682,12 +682,16 @@ JL_NO_ASAN static void ctx_switch(jl_task_t *lastt)
 
 JL_DLLEXPORT void jl_switch(void) JL_NOTSAFEPOINT_LEAVE JL_NOTSAFEPOINT_ENTER
 {
-    jl_schedule_interrupt_handler();
+    //printf("jl_switch to\n");
+    if (jl_want_interrupt_handler()) {
+        jl_schedule_interrupt_handler();
+    }
 
     jl_task_t *ct = jl_current_task;
     jl_ptls_t ptls = ct->ptls;
     jl_task_t *t = ptls->next_task;
     if (t == ct) {
+        //printf("jl_switch skip\n");
         return;
     }
     int8_t gc_state = jl_gc_unsafe_enter(ptls);
@@ -722,6 +726,8 @@ JL_DLLEXPORT void jl_switch(void) JL_NOTSAFEPOINT_LEAVE JL_NOTSAFEPOINT_ENTER
     assert(ptls == ct->ptls);
 #endif
 
+    //printf("jl_switch from\n");
+
     // Pop old values back off the stack
     assert(ct == jl_current_task &&
            0 != ct->ptls &&
@@ -731,6 +737,10 @@ JL_DLLEXPORT void jl_switch(void) JL_NOTSAFEPOINT_LEAVE JL_NOTSAFEPOINT_ENTER
 
     sig_atomic_t other_defer_signal = ptls->defer_signal;
     ptls->defer_signal = defer_signal;
+    int inthand = jl_want_interrupt_handler();
+    //printf("Checking deferral (jl_switch) %d...\n", inthand);
+    if (jl_want_interrupt_handler())
+        jl_schedule_interrupt_handler();
     if (other_defer_signal && !defer_signal)
         jl_sigint_safepoint(ptls);
 
@@ -1253,6 +1263,10 @@ CFI_NORETURN
     }
     else {
         JL_TRY {
+            int inthand = jl_want_interrupt_handler();
+            //printf("Checking deferral (_start_task) %d...\n", inthand);
+            if (jl_want_interrupt_handler())
+                jl_schedule_interrupt_handler();
             if (ptls->defer_signal) {
                 ptls->defer_signal = 0;
                 jl_sigint_safepoint(ptls);

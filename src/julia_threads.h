@@ -305,6 +305,9 @@ JL_DLLEXPORT int jl_getaffinity(int16_t tid, char *mask, int cpumasksize);
 JL_DLLEXPORT int jl_setaffinity(int16_t tid, char *mask, int cpumasksize);
 
 JL_DLLEXPORT void jl_schedule_task(struct _jl_task_t *task);
+
+JL_DLLEXPORT int jl_trigger_interrupt_handler(void);
+JL_DLLEXPORT int jl_want_interrupt_handler(void);
 JL_DLLEXPORT void jl_schedule_interrupt_handler(void);
 
 #ifdef __cplusplus

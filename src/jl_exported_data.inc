@@ -36,6 +36,7 @@
     XX(jl_core_module) \
     XX(jl_datatype_type) \
     XX(jl_debuginfo_type) \
+    XX(jl_global_defer_signal) \
     XX(jl_densearray_type) \
     XX(jl_diverror_exception) \
     XX(jl_emptysvec) \
@@ -64,6 +65,7 @@
     XX(jl_interconditional_type) \
     XX(jl_interrupt_exception) \
     XX(jl_interrupt_handler) \
+    XX(jl_interrupt_handler_condition) \
     XX(jl_intrinsic_type) \
     XX(jl_kwcall_func) \
     XX(jl_lineinfonode_type) \
