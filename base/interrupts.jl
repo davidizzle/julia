@@ -16,13 +16,14 @@ function _interrupt_wait()
 end
 function _interrupt_notify_all!()
     @lock INTERRUPT_HANDLERS_LOCK begin
+        # println(INTERRUPT_HANDLERS)
         for (mod, handlers) in INTERRUPT_HANDLERS
-            for (cond, handler) in handlers
-                if handler === current_task()
+            # println(handlers)
+            for (handler, cond) in handlers
+                # println("Condition: $(cond), handler: $(handler), current task: $(current_task())")
                     @lock cond begin
                         notify(cond)
                     end
-                end
             end
         end
     end
@@ -100,12 +101,14 @@ To unregister a previously-registered handler, use
     succession (which triggers a force-interrupt).
 """
 function register_interrupt_handler(mod::Module, handler::Task)
+    println("NOW IN THE REGISTER!")
     if ccall(:jl_generating_output, Cint, ()) == 1
         throw(ConcurrencyViolationError("Interrupt handlers cannot be registered during precompilation.\nPlease register your handler later (possibly in your module's `__init__`)."))
     end
     lock(INTERRUPT_HANDLERS_LOCK) do
         handlers = get!(Vector{Pair{Task,Threads.Condition}}, INTERRUPT_HANDLERS, mod)
         cond = Threads.Condition()
+        println("Now registering $(handler)...")
         push!(handlers, handler => cond)
     end
 end
@@ -136,7 +139,9 @@ Waits for an interrupt (Ctrl-C or SIGINT) to be signalled. The current task
 must a registed interrupt handler (see [`register_interrupt_handler`](@ref)).
 """
 function wait_for_interrupt()
+    println("Entered wait for interrupt")
     cond = _find_interrupt_handler_condition(current_task())
+    println("found the condition")
     @lock cond wait(cond)
 end
 function _find_interrupt_handler_condition(handler::Task)
@@ -225,9 +230,12 @@ function repl_interrupt_handler()
         while true
             _interrupt_wait() || return
 
+            original_repl_interface = Base.active_repl.t.out_stream;
+            Base.active_repl.t.out_stream = IOBuffer();
             # Display root menu
             @label display_root
             choice = TerminalMenus.request("Interrupt received, select an action:", root_menu)
+            Base.active_repl.interface = original_repl_interface
             if choice == 1
                 _interrupt_notify_all!()
             elseif choice == 2
@@ -243,7 +251,7 @@ function repl_interrupt_handler()
                 else
                     lock(INTERRUPT_HANDLERS_LOCK) do
                         for handler in INTERRUPT_HANDLERS[mods[choice]]
-                            _interrupt_notify_one!(handler)
+                              _interrupt_notify_one!(handler)
                         end
                     end
                     @goto display_mods

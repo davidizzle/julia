@@ -90,24 +90,37 @@ if !Sys.iswindows()
     end
 
     # interrupt handlers
-    Base.start_simple_interrupt_handler()
-    let exc_ref = Ref{Any}()
+    # Base.start_simple_interrupt_handler()
+    Base.start_repl_interrupt_handler()
+    inter_lock = ReentrantLock()
+    lock(inter_lock)
+    let graceful_interrupt = Ref{Bool}(false)
         handler = Threads.@spawn begin
-            try
-                wait()
-            catch exc
-                exc_ref[] = exc
-            end
+            
+            # Wait for handler to be registered
+            lock(inter_lock)
+            Base.wait_for_interrupt()
+            graceful_interrupt[] = true
+            
+            # Let the handler be unregistered for clean-up
+            unlock(inter_lock)
         end
-        yield() # let the handler start
+        errormonitor(handler)
+        
         Base.register_interrupt_handler(Base, handler)
+        # Let the handler start its work
+        unlock(inter_lock)
+        yield() # let the handler start
         ccall(:kill, Cvoid, (Cint, Cint,), getpid(), 2)
         for i in 1:10
             Libc.systemsleep(0.1)
             yield() # wait for the handler to be run
         end
+
+        # Wait for the handler to be finished before unregistering it
+        lock(inter_lock)
         Base.unregister_interrupt_handler(Base, handler)
-        @test isassigned(exc_ref) && exc_ref[] isa InterruptException
+        @test graceful_interrupt[]
     end
-    Base.exit_on_sigint(true)
+    Base.exit_on_sigint(true)   
 end
