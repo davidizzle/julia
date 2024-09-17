@@ -145,14 +145,18 @@ function wait_for_interrupt()
     @lock cond wait(cond)
 end
 function _find_interrupt_handler_condition(handler::Task)
-    @lock INTERRUPT_HANDLERS_LOCK begin
-        for (mod, handlers) in INTERRUPT_HANDLERS
-            for (other_handler, cond) in handlers
-                if handler === other_handler
-                    return cond
+    while true
+        @lock INTERRUPT_HANDLERS_LOCK begin
+            for (mod, handlers) in INTERRUPT_HANDLERS
+                for (other_handler, cond) in handlers
+                    if handler === other_handler
+                        return cond
+                    end
                 end
             end
         end
+
+        sleep(0.1)
     end
     throw(ConcurrencyViolationError("This task is not a registered interrupt handler"))
 end

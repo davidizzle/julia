@@ -90,26 +90,19 @@ if !Sys.iswindows()
     end
 
     # interrupt handlers
-    # Base.start_simple_interrupt_handler()
-    Base.start_repl_interrupt_handler()
-    inter_lock = ReentrantLock()
-    lock(inter_lock)
+    Base.start_simple_interrupt_handler()
     let graceful_interrupt = Ref{Bool}(false)
+
         handler = Threads.@spawn begin
-            
             # Wait for handler to be registered
-            lock(inter_lock)
             Base.wait_for_interrupt()
             graceful_interrupt[] = true
-            
-            # Let the handler be unregistered for clean-up
-            unlock(inter_lock)
         end
-        errormonitor(handler)
-        
+
         Base.register_interrupt_handler(Base, handler)
         # Let the handler start its work
-        unlock(inter_lock)
+        errormonitor(handler)
+
         yield() # let the handler start
         ccall(:kill, Cvoid, (Cint, Cint,), getpid(), 2)
         for i in 1:10
@@ -117,10 +110,10 @@ if !Sys.iswindows()
             yield() # wait for the handler to be run
         end
 
-        # Wait for the handler to be finished before unregistering it
-        lock(inter_lock)
+        # Purely for testing purposes, wait and unregister at the end
+        sleep(0.1)
         Base.unregister_interrupt_handler(Base, handler)
         @test graceful_interrupt[]
     end
-    Base.exit_on_sigint(true)   
+    Base.exit_on_sigint(true)
 end
