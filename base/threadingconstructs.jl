@@ -196,19 +196,28 @@ function threading_run(fun, static)
 end
 
 function _threadsfor(iter, lbody, schedule)
+
+    graceful_interrupt = Ref{Bool}(false)
+    handler = Threads.@spawn begin
+        Base.wait_for_interrupt()
+        graceful_interrupt[] = true
+    end
+    # Register this handler for threads
+    Base.register_interrupt_handler(Base, handler)
+
     lidx = iter.args[1]         # index
     range = iter.args[2]
     esc_range = esc(range)
     func = if schedule === :greedy
-        greedy_func(esc_range, lidx, lbody)
+        greedy_func(esc_range, lidx, lbody, graceful_interrupt)
     else
-        default_func(esc_range, lidx, lbody)
+        default_func(esc_range, lidx, lbody, graceful_interrupt)
     end
     quote
         local threadsfor_fun
         $func
         if $(schedule === :greedy || schedule === :dynamic || schedule === :default)
-            threading_run(threadsfor_fun, false)
+            threading_run(threadsfor_fun, false, graceful_interrupt)
         elseif ccall(:jl_in_threaded_region, Cint, ()) != 0 # :static
             error("`@threads :static` cannot be used concurrently or nested")
         else # :static
@@ -218,7 +227,7 @@ function _threadsfor(iter, lbody, schedule)
     end
 end
 
-function greedy_func(itr, lidx, lbody)
+function greedy_func(itr, lidx, lbody, interrupt)
     quote
         let c = Channel{eltype($itr)}(0,spawn=true) do ch
             for item in $itr
@@ -229,13 +238,17 @@ function greedy_func(itr, lidx, lbody)
             for item in c
                 local $(esc(lidx)) = item
                 $(esc(lbody))
+                if interrupt[]
+                    println("Threads interrupt success!")
+                    throw(InterruptException())
+                end
             end
         end
         end
     end
 end
 
-function default_func(itr, lidx, lbody)
+function default_func(itr, lidx, lbody, interrupt)
     quote
         let range = $itr
         function threadsfor_fun(tid = 1; onethread = false)
@@ -272,6 +285,10 @@ function default_func(itr, lidx, lbody)
             for i = f:l
                 local $(esc(lidx)) = @inbounds r[i]
                 $(esc(lbody))
+                if interrupt[]
+                    println("Threads interrupt success!")
+                    throw(InterruptException())
+                end
             end
         end
         end
