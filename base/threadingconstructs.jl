@@ -166,13 +166,17 @@ This includes both mark threads and concurrent sweep threads.
 """
 ngcthreads() = Int(unsafe_load(cglobal(:jl_n_gcthreads, Cint))) + 1
 
-function threading_run(fun, static)
+function threading_run(fun, static, interrupt)
     ccall(:jl_enter_threaded_region, Cvoid, ())
     n = threadpoolsize()
     tid_offset = threadpoolsize(:interactive)
     tasks = Vector{Task}(undef, n)
     for i = 1:n
-        t = Task(() -> fun(i)) # pass in tid
+        t = Task(() ->  try # pass in tid
+                            fun(i)
+                        catch e
+                            println("Thread $(i) successfully and gracefully cancelled.")
+                        end)
         t.sticky = static
         if static
             ccall(:jl_set_task_tid, Cint, (Any, Cint), t, tid_offset + i-1)
@@ -182,10 +186,28 @@ function threading_run(fun, static)
             _result = ccall(:jl_set_task_threadpoolid, Cint, (Any, Int8), t, _sym_to_tpid(:default))
             @assert _result == 1
         end
+
+        # Create a handler task that will monitor and interrupt the task if necessary
+        handler_task = @async begin
+            while !istaskdone(t)
+                yield()  # Give control to the scheduler
+                if interrupt[]
+                    println("Interrupt received for thread $(i)")
+                    Base.throwto(t, InterruptException())
+                end
+            end
+        end
+
         tasks[i] = t
         schedule(t)
     end
     for i = 1:n
+        #while !istaskdone(tasks[i])
+            #yield()
+            #if interrupt[]
+            #    Base.throwto(tasks[i], InterruptException())
+            #end
+        #end
         Base._wait(tasks[i])
     end
     ccall(:jl_exit_threaded_region, Cvoid, ())
@@ -198,10 +220,14 @@ end
 function _threadsfor(iter, lbody, schedule)
 
     graceful_interrupt = Ref{Bool}(false)
-    handler = Threads.@spawn begin
-        Base.wait_for_interrupt()
-        graceful_interrupt[] = true
-    end
+    handler = @async begin
+            println("waiting for interrupt actively")
+            Base.wait_for_interrupt()
+            graceful_interrupt[] = true
+            println("turning flag true: $(graceful_interrupt[])")
+        end
+    _result = ccall(:jl_set_task_threadpoolid, Cint, (Any, Int8), handler, 1)
+    @assert _result == 1
     # Register this handler for threads
     Base.register_interrupt_handler(Base, handler)
 
@@ -213,15 +239,16 @@ function _threadsfor(iter, lbody, schedule)
     else
         default_func(esc_range, lidx, lbody, graceful_interrupt)
     end
+    println(graceful_interrupt[])
     quote
         local threadsfor_fun
         $func
         if $(schedule === :greedy || schedule === :dynamic || schedule === :default)
-            threading_run(threadsfor_fun, false, graceful_interrupt)
+            threading_run(threadsfor_fun, false, $(esc(graceful_interrupt)))
         elseif ccall(:jl_in_threaded_region, Cint, ()) != 0 # :static
             error("`@threads :static` cannot be used concurrently or nested")
         else # :static
-            threading_run(threadsfor_fun, true)
+            threading_run(threadsfor_fun, true, $(esc(graceful_interrupt)))
         end
         nothing
     end
@@ -238,8 +265,8 @@ function greedy_func(itr, lidx, lbody, interrupt)
             for item in c
                 local $(esc(lidx)) = item
                 $(esc(lbody))
-                if interrupt[]
-                    println("Threads interrupt success!")
+                if $(esc(interrupt[]))
+                    println("Threads interrupt success for greedy!")
                     throw(InterruptException())
                 end
             end
@@ -285,8 +312,8 @@ function default_func(itr, lidx, lbody, interrupt)
             for i = f:l
                 local $(esc(lidx)) = @inbounds r[i]
                 $(esc(lbody))
-                if interrupt[]
-                    println("Threads interrupt success!")
+                if $(esc(interrupt[]))
+                    println("Threads interrupt success for default!")
                     throw(InterruptException())
                 end
             end
