@@ -172,11 +172,13 @@ function threading_run(fun, static, interrupt)
     tid_offset = threadpoolsize(:interactive)
     tasks = Vector{Task}(undef, n)
     for i = 1:n
-        t = Task(() ->  try # pass in tid
-                            fun(i)
-                        catch e
-                            println("Thread $(i) successfully and gracefully cancelled.")
-                        end)
+        t = Task(() ->  begin
+                            fun(interrupt, i)
+                        end)#try # pass in tid
+                        #    fun(i)
+                        #catch e
+                        #    println("Thread $(i) successfully but forcefully cancelled.")
+                        #end)
         t.sticky = static
         if static
             ccall(:jl_set_task_tid, Cint, (Any, Cint), t, tid_offset + i-1)
@@ -188,7 +190,7 @@ function threading_run(fun, static, interrupt)
         end
 
         # Create a handler task that will monitor and interrupt the task if necessary
-        handler_task = @async begin
+        #=handler_task = @async begin
             while !istaskdone(t)
                 yield()  # Give control to the scheduler
                 if interrupt[]
@@ -196,7 +198,7 @@ function threading_run(fun, static, interrupt)
                     Base.throwto(t, InterruptException())
                 end
             end
-        end
+        end=#
 
         tasks[i] = t
         schedule(t)
@@ -217,68 +219,111 @@ function threading_run(fun, static, interrupt)
     end
 end
 
+function _threadscancellation_r(lbody, interrupt)
+    if !isa(lbody[], Expr)
+        return
+    end
+
+    if lbody[].head == :block
+        new_args = Vector{Any}()
+        for argument in lbody[].args
+            if isa(argument, LineNumberNode)
+                push!(new_args, argument)
+                continue
+            end
+            arg_ref = Ref(argument)
+            _threadscancellation_r(arg_ref, interrupt)
+            push!(new_args, arg_ref[])
+            push!(new_args, :(if $interrupt[]; println("Thread gracefully interrupted!"); return; end))
+        end
+        lbody[] = Expr(:block, new_args...)
+    elseif lbody[].head == :for
+        loop_body_ref = Ref(lbody[].args[2])
+        _threadscancellation_r(loop_body_ref, interrupt)
+        lbody[].args[2] = loop_body_ref[]
+    elseif lbody[].head == :while
+        loop_body_ref = Ref(lbody[].args[2])
+        _threadscancellation_r(loop_body_ref, interrupt)
+        lbody[].args[2] = loop_body_ref[]
+    elseif lbody[].head == :if || lbody[].head == :elseif
+        condition = lbody[].args[1]
+        then_ref = Ref(lbody[].args[2])
+        else_ref = Ref(lbody[].args[3])
+
+        _threadscancellation_r(then_ref, interrupt)
+        _threadscancellation_r(else_ref, interrupt)
+        lbody[].args[2] = then_ref[]
+        lbody[].args[3] = else_ref[]
+    else
+        return
+    end
+end
+
 function _threadsfor(iter, lbody, schedule)
 
     graceful_interrupt = Ref{Bool}(false)
-    handler = @async begin
+    handler = Task(() -> begin
             println("waiting for interrupt actively")
             Base.wait_for_interrupt()
             graceful_interrupt[] = true
             println("turning flag true: $(graceful_interrupt[])")
-        end
+        end)
     _result = ccall(:jl_set_task_threadpoolid, Cint, (Any, Int8), handler, 1)
     @assert _result == 1
+    Base.schedule(handler)
     # Register this handler for threads
     Base.register_interrupt_handler(Base, handler)
+
+    # Source code transformation
+    lbody_ref = Ref(lbody)
+    _threadscancellation_r(lbody_ref, graceful_interrupt)
+    lbody = lbody_ref[]
 
     lidx = iter.args[1]         # index
     range = iter.args[2]
     esc_range = esc(range)
     func = if schedule === :greedy
-        greedy_func(esc_range, lidx, lbody, graceful_interrupt)
+        greedy_func(esc_range, lidx, lbody)
     else
-        default_func(esc_range, lidx, lbody, graceful_interrupt)
+        default_func(esc_range, lidx, lbody)
     end
-    println(graceful_interrupt[])
+    #println(graceful_interrupt[])
     quote
         local threadsfor_fun
         $func
         if $(schedule === :greedy || schedule === :dynamic || schedule === :default)
-            threading_run(threadsfor_fun, false, $(esc(graceful_interrupt)))
+            threading_run(threadsfor_fun, false, $(graceful_interrupt))
         elseif ccall(:jl_in_threaded_region, Cint, ()) != 0 # :static
             error("`@threads :static` cannot be used concurrently or nested")
         else # :static
-            threading_run(threadsfor_fun, true, $(esc(graceful_interrupt)))
+            threading_run(threadsfor_fun, true, $(graceful_interrupt))
         end
         nothing
     end
 end
 
-function greedy_func(itr, lidx, lbody, interrupt)
+function greedy_func(itr, lidx, lbody)
     quote
         let c = Channel{eltype($itr)}(0,spawn=true) do ch
             for item in $itr
                 put!(ch, item)
             end
         end
-        function threadsfor_fun(tid)
+        function threadsfor_fun(interrupt, tid)
             for item in c
                 local $(esc(lidx)) = item
                 $(esc(lbody))
-                if $(esc(interrupt[]))
-                    println("Threads interrupt success for greedy!")
-                    throw(InterruptException())
-                end
             end
         end
         end
     end
 end
 
-function default_func(itr, lidx, lbody, interrupt)
+function default_func(itr, lidx, lbody)
     quote
         let range = $itr
-        function threadsfor_fun(tid = 1; onethread = false)
+        function threadsfor_fun(interrupt, tid = 1; onethread = false)
+            #println(interrupt)
             r = range # Load into local variable
             lenr = length(r)
             # divide loop iterations among threads
@@ -312,10 +357,6 @@ function default_func(itr, lidx, lbody, interrupt)
             for i = f:l
                 local $(esc(lidx)) = @inbounds r[i]
                 $(esc(lbody))
-                if $(esc(interrupt[]))
-                    println("Threads interrupt success for default!")
-                    throw(InterruptException())
-                end
             end
         end
         end
